@@ -1,29 +1,25 @@
-import { headers } from "next/headers";
 import Link from "next/link";
-import { chatGPTSignInPath, getChatGPTUser } from "./chatgpt-auth";
+import { getAuthUser } from "./auth";
 import StronglyApp from "./strongly-app";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const user = await getChatGPTUser();
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("host") ?? "";
-  const isLocal = host.startsWith("localhost") || host.startsWith("127.0.0.1");
+  const user = await getAuthUser();
 
-  if (!user && !isLocal) {
+  if (!user) {
     return (
       <main className="landing">
         <nav className="landing-nav">
           <Link className="wordmark" href="/">STRONGLY<span>.</span></Link>
-          <a className="button button-ghost" href={chatGPTSignInPath("/")}>Sign in</a>
+          <a className="button button-ghost" href="/sign-in">Sign in</a>
         </nav>
         <section className="hero">
           <div className="hero-copy">
             <p className="eyebrow">A WEEKLY QUEST SYSTEM</p>
             <h1>Make your<br />week <em>strong.</em></h1>
             <p>Turn your real priorities into daily quests. Build momentum, earn rewards, and create a record you’ll be proud to look back on.</p>
-            <a className="button button-gold" href={chatGPTSignInPath("/")}>Begin your first quest <span>→</span></a>
+            <a className="button button-gold" href="/sign-in">Begin your first quest <span>→</span></a>
             <div className="hero-proof"><span>✦</span> Three quests. Seven days. One stronger you.</div>
           </div>
           <div className="hero-card" aria-label="Example weekly quest card">
@@ -46,5 +42,5 @@ export default async function Home() {
     );
   }
 
-  return <StronglyApp identity={user ?? { email: "hero@strongly.local", displayName: "Hero", fullName: "Hero" }} />;
+  return <StronglyApp identity={user} />;
 }

@@ -1,98 +1,40 @@
-# vinext-starter
+# STRONGLY
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+Fantasy RPG productivity app built with standard Next.js, PostgreSQL, and passwordless email authentication. The production architecture is compatible with Azure App Service or Azure Container Apps.
 
-## Prerequisites
+## Requirements
 
-- Node.js `>=22.13.0`
+- Node.js 22.13 or newer
+- PostgreSQL 14 or newer
+- A Resend account and verified sender domain for production email delivery
 
-## Quick Start
+## Local setup
 
-```bash
-npm install
-npm run dev
-npm run build
-```
+1. Copy `.env.example` to `.env.local` and set `DATABASE_URL`.
+2. Create the database schema with `npm run db:migrate`.
+3. Start the app with `npm run dev`.
 
-This starter does not use `wrangler.jsonc`.
+On localhost, verification codes are shown on the sign-in screen. Resend is only used outside localhost.
 
-## Included Shape
+## Commands
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+- `npm run dev` — run the standard Next.js development server
+- `npm run build` — create the production Next.js build
+- `npm start` — run the production server
+- `npm run lint` — lint the application
+- `npm run db:migrate` — create the PostgreSQL schema
+- `npm run db:generate` — generate schema changes with Drizzle Kit
 
-## Workspace Auth Headers
+## Azure deployment
 
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
+Create an Azure Database for PostgreSQL Flexible Server and an Azure App Service using a supported Node.js runtime. Configure these App Service settings:
 
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
+- `DATABASE_URL`
+- `DATABASE_SSL=true`
+- `RESEND_API_KEY`
+- `AUTH_FROM_EMAIL`
+- `NODE_ENV=production`
 
-Treat the full name as optional and fall back to email when it is absent:
+Run `npm run db:migrate` once against the new database, then deploy the repository. App Service can build the project with `npm ci && npm run build` and start it with `npm start`.
 
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
-```
-
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+The included `Dockerfile` can alternatively be deployed to Azure Container Apps.

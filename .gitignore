@@ -22,6 +22,9 @@
 .DS_Store
 *.pem
 .*.log
+.vite-cache/
+.vite-local-cache/
+.vite-local-cache-v2/
 
 # debug
 npm-debug.log*
@@ -37,6 +40,7 @@ yarn-error.log*
 
 # typescript
 next-env.d.ts
+*.tsbuildinfo
 /dist/
 /.wrangler/
 /outputs/

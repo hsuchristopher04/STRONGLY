@@ -1,6 +1,7 @@
-import { env } from "cloudflare:workers";
-import { headers } from "next/headers";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { getAuthUser } from "../../auth";
+import { db } from "../../../db";
+
+const env = { DB: db };
 
 type Action =
   | { type: "toggle-daily"; questId: string; completedOn: string }
@@ -23,12 +24,7 @@ const shop = [
 ] as const;
 
 async function identity() {
-  const user = await getChatGPTUser();
-  if (user) return user;
-  const host = (await headers()).get("host") ?? "";
-  return host.startsWith("localhost") || host.startsWith("127.0.0.1")
-    ? { email: "hero@strongly.local", displayName: "Hero", fullName: "Hero" }
-    : null;
+  return getAuthUser();
 }
 
 function idFor(email: string) {
@@ -70,7 +66,7 @@ async function seedAccount(userId: string, timezone: string) {
   const now = new Date().toISOString();
 
   const statements = [
-    env.DB.prepare("INSERT OR IGNORE INTO weeks (id,user_id,starts_on,ends_on,status) VALUES (?,?,?,?, 'active')").bind(weekId, userId, start, end),
+    env.DB.prepare("INSERT INTO weeks (id,user_id,starts_on,ends_on,status) VALUES (?,?,?,?, 'active') ON CONFLICT DO NOTHING").bind(weekId, userId, start, end),
     ...[
       ["train", "Train for 30 minutes", "required", null, 10, 0],
       ["plan", "Plan tomorrow before 9 PM", "required", null, 10, 1],
@@ -78,25 +74,25 @@ async function seedAccount(userId: string, timezone: string) {
       ["water", "Drink 8 glasses of water", "bonus", 3, 15, 0],
       ["walk", "Take a 20 minute walk", "bonus", 3, 15, 1],
     ].map(([key, title, kind, day, reward, position]) =>
-      env.DB.prepare("INSERT OR IGNORE INTO daily_quests (id,week_id,user_id,title,kind,day_index,reward,position) VALUES (?,?,?,?,?,?,?,?)")
+      env.DB.prepare("INSERT INTO daily_quests (id,week_id,user_id,title,kind,day_index,reward,position) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING")
         .bind(`${weekId}_${key}`, weekId, userId, title, kind, day, reward, position)),
     ...[
       ["portfolio", "Finish portfolio case study"],
       ["mealprep", "Meal prep for next week"],
     ].map(([key, title], position) =>
-      env.DB.prepare("INSERT OR IGNORE INTO weekly_quests (id,week_id,user_id,title,reward,position) VALUES (?,?,?,?,100,?)")
+      env.DB.prepare("INSERT INTO weekly_quests (id,week_id,user_id,title,reward,position) VALUES (?,?,?,?,100,?) ON CONFLICT DO NOTHING")
         .bind(`${weekId}_${key}`, weekId, userId, title, position)),
-    env.DB.prepare("INSERT OR IGNORE INTO goals (id,user_id,title,description,target_date,status) VALUES (?,?,?,?,?,'active')")
+    env.DB.prepare("INSERT INTO goals (id,user_id,title,description,target_date,status) VALUES (?,?,?,?,?,'active') ON CONFLICT DO NOTHING")
       .bind(goalId, userId, "Run my first half marathon", "Build endurance, stay consistent, and cross the finish line strong.", "2026-10-18"),
     ...[
       "Choose a training plan", "Run 5K without stopping", "Complete a 10K", "Finish a 10-mile run", "Race day",
     ].map((title, position) =>
-      env.DB.prepare("INSERT OR IGNORE INTO milestones (id,goal_id,user_id,title,position,reward) VALUES (?,?,?,?,?,150)")
+      env.DB.prepare("INSERT INTO milestones (id,goal_id,user_id,title,position,reward) VALUES (?,?,?,?,?,150) ON CONFLICT DO NOTHING")
         .bind(`${goalId}_${position}`, goalId, userId, title, position)),
     ...shop.map(([id, name, kind, price, description]) =>
-      env.DB.prepare("INSERT OR IGNORE INTO cosmetics (id,name,kind,price,description) VALUES (?,?,?,?,?)")
+      env.DB.prepare("INSERT INTO cosmetics (id,name,kind,price,description) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING")
         .bind(id, name, kind, price, description)),
-    env.DB.prepare("INSERT OR IGNORE INTO coin_ledger (id,user_id,amount,reason,source_type,source_id,created_at) VALUES (?,?,?,?,?,?,?)")
+    env.DB.prepare("INSERT INTO coin_ledger (id,user_id,amount,reason,source_type,source_id,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING")
       .bind(`${userId}_welcome`, userId, 450, "Founding adventurer grant", "welcome", "welcome", now),
   ];
   await env.DB.batch(statements);

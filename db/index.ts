@@ -2,14 +2,40 @@ import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
 let pool: Pool | undefined;
 
-function connectionPool() {
+function shouldUseSsl(connectionString: string) {
+  if (process.env.DATABASE_SSL === "false") return false;
+  if (process.env.DATABASE_SSL === "true") return true;
+  try {
+    const host = new URL(connectionString).hostname;
+    return host !== "localhost" && host !== "127.0.0.1";
+  } catch {
+    return true;
+  }
+}
+
+export function connectionPool() {
+  if (pool) return pool;
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not configured");
-  pool ??= new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false },
+  const connectionString = process.env.DATABASE_URL;
+  pool = new Pool({
+    connectionString,
+    ssl: shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false,
     max: 10,
+    connectionTimeoutMillis: 10_000,
+    application_name: "strongly",
   });
   return pool;
+}
+
+export function setDatabasePool(nextPool: Pool | undefined) {
+  pool = nextPool;
+}
+
+export async function closeDatabasePool() {
+  if (!pool) return;
+  const current = pool;
+  pool = undefined;
+  await current.end();
 }
 
 function postgresPlaceholders(source: string) {

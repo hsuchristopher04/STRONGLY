@@ -1,5 +1,6 @@
 import { getAuthUser } from "../../auth";
 import { db } from "../../../db";
+import { deleteDailyCompletion, findDailyCompletion, findDailyQuest, findMilestone, findOwnedCosmetic, findWeeklyQuest, updateMilestoneCompletion, updateProfile, updateWeeklyCompletion } from "./ownership-store";
 
 const env = { DB: db };
 
@@ -114,12 +115,12 @@ async function loadState(userId: string) {
     env.DB.prepare(
       `SELECT q.id,q.title,q.reward,q.kind,CASE WHEN c.id IS NULL THEN 0 ELSE 1 END complete
        FROM daily_quests q LEFT JOIN daily_completions c ON c.quest_id=q.id AND c.completed_on=?
-       WHERE q.week_id=? ORDER BY q.kind DESC,q.position`,
-    ).bind(campaign.today, campaign.weekId).all<QuestRow>(),
+       WHERE q.week_id=? AND q.user_id=? ORDER BY q.kind DESC,q.position`,
+    ).bind(campaign.today, campaign.weekId, userId).all<QuestRow>(),
     env.DB.prepare(
       `SELECT id,title,reward,CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END complete
-       FROM weekly_quests WHERE week_id=? ORDER BY position`,
-    ).bind(campaign.weekId).all<WeeklyRow>(),
+       FROM weekly_quests WHERE week_id=? AND user_id=? ORDER BY position`,
+    ).bind(campaign.weekId, userId).all<WeeklyRow>(),
     env.DB.prepare("SELECT id,title,description,target_date FROM goals WHERE user_id=? AND status='active' ORDER BY target_date").bind(userId).all(),
     env.DB.prepare(
       `SELECT id,goal_id,title,reward,position,CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END complete
@@ -168,15 +169,12 @@ export async function POST(request: Request) {
     const now = new Date().toISOString();
 
     if (action.type === "toggle-daily") {
-      const quest = await env.DB.prepare(
-        "SELECT q.reward,w.status FROM daily_quests q JOIN weeks w ON w.id=q.week_id WHERE q.id=? AND q.user_id=?",
-      ).bind(action.questId, userId).first<{ reward: number; status: string }>();
+      const quest = await findDailyQuest(userId, action.questId);
       if (!quest || quest.status === "closed") return Response.json({ error: "Quest is unavailable" }, { status: 404 });
-      const completion = await env.DB.prepare("SELECT id FROM daily_completions WHERE quest_id=? AND completed_on=? AND user_id=?")
-        .bind(action.questId, action.completedOn, userId).first<{ id: string }>();
+      const completion = await findDailyCompletion(userId, action.questId, action.completedOn);
       if (completion) {
         await env.DB.batch([
-          env.DB.prepare("DELETE FROM daily_completions WHERE id=? AND user_id=?").bind(completion.id, userId),
+          deleteDailyCompletion(userId, completion.id),
           env.DB.prepare("INSERT INTO coin_ledger (id,user_id,amount,reason,source_type,source_id,created_at) VALUES (?,?,?,?,?,?,?)")
             .bind(crypto.randomUUID(), userId, -quest.reward, "Daily quest reopened", "daily-reversal", crypto.randomUUID(), now),
         ]);
@@ -191,23 +189,20 @@ export async function POST(request: Request) {
       }
       await reconcileStrongDay(userId, action.completedOn);
     } else if (action.type === "toggle-weekly") {
-      const quest = await env.DB.prepare(
-        "SELECT q.reward,q.completed_at,w.status FROM weekly_quests q JOIN weeks w ON w.id=q.week_id WHERE q.id=? AND q.user_id=?",
-      ).bind(action.questId, userId).first<{ reward: number; completed_at: string | null; status: string }>();
+      const quest = await findWeeklyQuest(userId, action.questId);
       if (!quest || quest.status === "closed") return Response.json({ error: "Quest is unavailable" }, { status: 404 });
       const completing = !quest.completed_at;
       await env.DB.batch([
-        env.DB.prepare("UPDATE weekly_quests SET completed_at=? WHERE id=? AND user_id=?").bind(completing ? now : null, action.questId, userId),
+        updateWeeklyCompletion(userId, action.questId, completing ? now : null),
         env.DB.prepare("INSERT INTO coin_ledger (id,user_id,amount,reason,source_type,source_id,created_at) VALUES (?,?,?,?,?,?,?)")
           .bind(crypto.randomUUID(), userId, completing ? quest.reward : -quest.reward, completing ? "Weekly quest complete" : "Weekly quest reopened", "weekly-toggle", crypto.randomUUID(), now),
       ]);
     } else if (action.type === "toggle-milestone") {
-      const item = await env.DB.prepare("SELECT reward,completed_at FROM milestones WHERE id=? AND user_id=?")
-        .bind(action.milestoneId, userId).first<{ reward: number; completed_at: string | null }>();
+      const item = await findMilestone(userId, action.milestoneId);
       if (!item) return Response.json({ error: "Milestone not found" }, { status: 404 });
       const completing = !item.completed_at;
       await env.DB.batch([
-        env.DB.prepare("UPDATE milestones SET completed_at=? WHERE id=? AND user_id=?").bind(completing ? now : null, action.milestoneId, userId),
+        updateMilestoneCompletion(userId, action.milestoneId, completing ? now : null),
         env.DB.prepare("INSERT INTO coin_ledger (id,user_id,amount,reason,source_type,source_id,created_at) VALUES (?,?,?,?,?,?,?)")
           .bind(crypto.randomUUID(), userId, completing ? item.reward : -item.reward, completing ? "Milestone complete" : "Milestone reopened", "milestone-toggle", crypto.randomUUID(), now),
       ]);
@@ -226,16 +221,14 @@ export async function POST(request: Request) {
       if (action.cosmeticId === "obsidian") {
         await env.DB.prepare("UPDATE users SET equipped_theme='obsidian' WHERE id=?").bind(userId).run();
       } else {
-        const item = await env.DB.prepare(
-          "SELECT c.id,c.kind FROM cosmetics c JOIN user_cosmetics u ON u.cosmetic_id=c.id WHERE c.id=? AND u.user_id=?",
-        ).bind(action.cosmeticId, userId).first<{ id: string; kind: string }>();
+        const item = await findOwnedCosmetic(userId, action.cosmeticId);
         if (!item) return Response.json({ error: "Cosmetic is not owned" }, { status: 403 });
         const column = item.kind === "theme" ? "equipped_theme" : "equipped_badge";
         await env.DB.prepare(`UPDATE users SET ${column}=? WHERE id=?`).bind(item.id, userId).run();
       }
     } else if (action.type === "profile") {
       if (!action.displayName.trim() || !action.timezone.includes("/")) return Response.json({ error: "Invalid profile" }, { status: 400 });
-      await env.DB.prepare("UPDATE users SET display_name=?,timezone=? WHERE id=?").bind(action.displayName.trim(), action.timezone, userId).run();
+      await updateProfile(userId, action.displayName.trim(), action.timezone).run();
     } else {
       return Response.json({ error: "Unknown action" }, { status: 400 });
     }

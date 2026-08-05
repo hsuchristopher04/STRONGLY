@@ -23,11 +23,11 @@ export default async function Home() {
             <div className="hero-proof"><span>✦</span> Three quests. Seven days. One stronger you.</div>
           </div>
           <div className="hero-card" aria-label="Example weekly quest card">
-            <div className="hero-card-top"><span>WEEK 31</span><b>450 ◈</b></div>
+            <div className="hero-card-top"><span>WEEK 31</span><b>6 PP</b></div>
             <h2>Today’s quests</h2>
             <p>Wednesday, July 29</p>
             {["Train for 30 minutes", "Plan tomorrow before 9 PM", "Read 20 pages"].map((quest, index) => (
-              <div className="hero-quest" key={quest}><i>{index < 2 ? "✓" : ""}</i><span>{quest}<small>Required · +10</small></span></div>
+              <div className="hero-quest" key={quest}><i>{index < 2 ? "✓" : ""}</i><span>{quest}<small>Required · +3 PP</small></span></div>
             ))}
             <div className="hero-progress"><span style={{ width: "67%" }} /></div>
             <footer><b>2 of 3 complete</b><span>Each quest +3 PP</span></footer>
@@ -36,7 +36,7 @@ export default async function Home() {
         <section className="feature-strip">
           <article><b>01</b><h3>Plan the campaign</h3><p>Choose the actions that will make this week count.</p></article>
           <article><b>02</b><h3>Complete the quests</h3><p>Show up daily and build prestige through real progress.</p></article>
-          <article><b>03</b><h3>Build your legend</h3><p>Unlock themes, earn badges, and watch your record grow.</p></article>
+          <article><b>03</b><h3>Build your legend</h3><p>Reach prestige ranks and watch your record grow over time.</p></article>
         </section>
       </main>
     );

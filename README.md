@@ -6,7 +6,11 @@ Weekly campaigns follow each user’s saved timezone and run Sunday through Satu
 
 ## Prestige progression
 
-Every completed daily quest, required or bonus, awards 3 prestige points. Reopening a quest reverses those points. Weekly quests and milestones track progress but do not award prestige points. Current prestige thresholds are 1,000, 10,000, 100,000, and 1,000,000 lifetime points. Prestige records rank and long-term consistency; it does not change the website theme.
+Every completed daily quest, required or bonus, awards 3 prestige points. Completing all three required quests and every bonus quest scheduled for that day secures a Strong Day and awards 10 additional prestige points. Reopening any quest that breaks those conditions reverses the applicable points. Weekly quests and milestones track progress but do not award prestige points. Current prestige thresholds are 1,000, 10,000, 100,000, and 1,000,000 lifetime points. Prestige records rank and long-term consistency; it does not change the website theme.
+
+New accounts receive a five-step walkthrough covering daily quests, weekly planning, long-term goals, History, and Prestige. Completion is saved per account, and the walkthrough can be replayed from Settings.
+
+The Week screen lets users edit the current campaign and prepare the following campaign. The Goals screen supports creating and editing user-authored long-term goals with optional target dates and one to ten ordered milestones.
 
 ## Requirements
 
@@ -32,6 +36,8 @@ Confirm connectivity at `http://localhost:3000/api/health/database`. A successfu
 ```json
 { "status": "ok", "database": "available" }
 ```
+
+Neon connection strings may include `sslmode=require`. STRONGLY removes that driver-specific query parameter and configures certificate-verified TLS directly, avoiding `pg` compatibility warnings while keeping the connection encrypted.
 
 On localhost, verification codes are shown on the sign-in screen. Resend is only used outside localhost.
 

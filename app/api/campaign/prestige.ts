@@ -1,4 +1,9 @@
 export const DAILY_QUEST_POINTS = 3;
+export const STRONG_DAY_POINTS = 10;
+
+export function qualifiesForStrongDay(requiredComplete: number, bonusAssigned: number, bonusComplete: number) {
+  return requiredComplete === 3 && bonusComplete === bonusAssigned;
+}
 
 export const PRESTIGE_TIERS = [
   { level: 1, threshold: 1_000, title: "Iron Resolve" },

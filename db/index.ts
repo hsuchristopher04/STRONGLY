@@ -13,6 +13,13 @@ function shouldUseSsl(connectionString: string) {
   }
 }
 
+export function normalizePostgresUrl(connectionString: string) {
+  const url = new URL(connectionString);
+  url.searchParams.delete("sslmode");
+  url.searchParams.delete("uselibpqcompat");
+  return url.toString();
+}
+
 export function connectionPool() {
   if (pool) return pool;
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not configured");
@@ -21,8 +28,8 @@ export function connectionPool() {
     throw new Error("DATABASE_URL still contains example placeholders. Replace it in .env.local with your real PostgreSQL connection string.");
   }
   pool = new Pool({
-    connectionString,
-    ssl: shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false,
+    connectionString: normalizePostgresUrl(connectionString),
+    ssl: shouldUseSsl(connectionString) ? { rejectUnauthorized: true } : false,
     max: 10,
     connectionTimeoutMillis: 10_000,
     application_name: "strongly",
@@ -48,7 +55,7 @@ function postgresPlaceholders(source: string) {
 
 class Statement {
   private values: unknown[] = [];
-  constructor(private readonly source: string) {}
+  constructor(private readonly source: string, private readonly client?: PoolClient) {}
 
   bind(...values: unknown[]) {
     this.values = values;
@@ -56,7 +63,7 @@ class Statement {
   }
 
   async execute(client?: PoolClient) {
-    const executor = client ?? connectionPool();
+    const executor = client ?? this.client ?? connectionPool();
     return executor.query(postgresPlaceholders(this.source), this.values);
   }
 
@@ -88,6 +95,20 @@ export const db = {
       for (const statement of statements) results.push(await statement.execute(client));
       await client.query("COMMIT");
       return results;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+  async transaction<T>(operation: (transaction: { prepare(source: string): Statement }) => Promise<T>) {
+    const client = await connectionPool().connect();
+    try {
+      await client.query("BEGIN");
+      const result = await operation({ prepare: (source: string) => new Statement(source, client) });
+      await client.query("COMMIT");
+      return result;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

@@ -8,9 +8,12 @@ if (connectionString.includes("your-server.postgres.database.azure.com") || conn
   throw new Error("DATABASE_URL still contains example placeholders. Replace it with your real PostgreSQL connection string before migrating.");
 }
 const explicitSsl = process.env.DATABASE_SSL;
-const localHost = ["localhost", "127.0.0.1"].includes(new URL(connectionString).hostname);
-const ssl = explicitSsl === "false" || (explicitSsl !== "true" && localHost) ? false : { rejectUnauthorized: false };
-const client = new pg.Client({ connectionString, ssl, application_name: "strongly-migrations" });
+const parsedConnection = new URL(connectionString);
+const localHost = ["localhost", "127.0.0.1"].includes(parsedConnection.hostname);
+parsedConnection.searchParams.delete("sslmode");
+parsedConnection.searchParams.delete("uselibpqcompat");
+const ssl = explicitSsl === "false" || (explicitSsl !== "true" && localHost) ? false : { rejectUnauthorized: true };
+const client = new pg.Client({ connectionString: parsedConnection.toString(), ssl, application_name: "strongly-migrations" });
 const migrationsDirectory = new URL("../drizzle/", import.meta.url);
 
 await client.connect();

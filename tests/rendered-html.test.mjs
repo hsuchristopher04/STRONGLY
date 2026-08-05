@@ -18,6 +18,11 @@ test("ships the STRONGLY product experience", async () => {
   assert.match(app, /Goals/);
   assert.match(app, /History/);
   assert.match(app, /Prestige/);
+  assert.match(app, /walkthroughSteps/);
+  assert.match(app, /Replay walkthrough/);
+  assert.match(app, /Save this week/);
+  assert.match(app, /Create a long-term goal/);
+  assert.match(app, /position: "fixed"/);
   assert.match(app, /Settings/);
   assert.match(css, /@media\(max-width:760px\)/);
   assert.equal(JSON.parse(packageSource).scripts.dev, "next dev");

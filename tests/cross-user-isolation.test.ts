@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import type { Pool } from "pg";
 import { newDb } from "pg-mem";
-import { closeDatabasePool, db, setDatabasePool } from "../db/index";
+import { closeDatabasePool, db, normalizePostgresUrl, setDatabasePool } from "../db/index";
 import {
   deleteDailyCompletion,
   findDailyCompletion,
@@ -23,6 +23,7 @@ async function databaseFixture() {
   const migrations = await Promise.all([
     readFile(new URL("../drizzle/0000_azure_postgres.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0001_prestige_system.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0002_new_user_walkthrough.sql", import.meta.url), "utf8"),
   ]);
   for (const migration of migrations) await pool.query(migration);
   await db.batch([
@@ -41,6 +42,12 @@ async function databaseFixture() {
 
 test.beforeEach(databaseFixture);
 test.afterEach(closeDatabasePool);
+
+test("normalizes provider SSL parameters before node-postgres parses them", () => {
+  const normalized = normalizePostgresUrl("postgresql://user:secret@example.com/strongly?sslmode=require&channel_binding=require");
+  assert.doesNotMatch(normalized, /sslmode|uselibpqcompat/);
+  assert.match(normalized, /channel_binding=require/);
+});
 
 test("ownership lookups reject every cross-user resource", async () => {
   assert.equal(await findDailyQuest("user_a", "daily_b"), null);

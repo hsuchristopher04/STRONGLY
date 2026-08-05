@@ -17,6 +17,9 @@ export function connectionPool() {
   if (pool) return pool;
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not configured");
   const connectionString = process.env.DATABASE_URL;
+  if (connectionString.includes("your-server.postgres.database.azure.com") || connectionString.includes("replace-me")) {
+    throw new Error("DATABASE_URL still contains example placeholders. Replace it in .env.local with your real PostgreSQL connection string.");
+  }
   pool = new Pool({
     connectionString,
     ssl: shouldUseSsl(connectionString) ? { rejectUnauthorized: false } : false,

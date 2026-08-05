@@ -1,13 +1,12 @@
 import { db } from "../../../db";
 
-export type OwnedDailyQuest = { reward: number; status: string };
+export type OwnedDailyQuest = { status: string; kind: "required" | "bonus"; day_index: number | null };
 export type OwnedCompletion = { id: string };
-export type OwnedWeeklyQuest = { reward: number; completed_at: string | null; status: string };
-export type OwnedMilestone = { reward: number; completed_at: string | null };
-export type OwnedCosmetic = { id: string; kind: string };
+export type OwnedWeeklyQuest = { completed_at: string | null; status: string };
+export type OwnedMilestone = { completed_at: string | null };
 
 export function findDailyQuest(userId: string, questId: string) {
-  return db.prepare("SELECT q.reward,w.status FROM daily_quests q JOIN weeks w ON w.id=q.week_id WHERE q.id=? AND q.user_id=? AND w.user_id=?")
+  return db.prepare("SELECT q.kind,q.day_index,w.status FROM daily_quests q JOIN weeks w ON w.id=q.week_id WHERE q.id=? AND q.user_id=? AND w.user_id=?")
     .bind(questId, userId, userId).first<OwnedDailyQuest>();
 }
 
@@ -17,18 +16,13 @@ export function findDailyCompletion(userId: string, questId: string, completedOn
 }
 
 export function findWeeklyQuest(userId: string, questId: string) {
-  return db.prepare("SELECT q.reward,q.completed_at,w.status FROM weekly_quests q JOIN weeks w ON w.id=q.week_id WHERE q.id=? AND q.user_id=? AND w.user_id=?")
+  return db.prepare("SELECT q.completed_at,w.status FROM weekly_quests q JOIN weeks w ON w.id=q.week_id WHERE q.id=? AND q.user_id=? AND w.user_id=?")
     .bind(questId, userId, userId).first<OwnedWeeklyQuest>();
 }
 
 export function findMilestone(userId: string, milestoneId: string) {
-  return db.prepare("SELECT reward,completed_at FROM milestones WHERE id=? AND user_id=?")
+  return db.prepare("SELECT completed_at FROM milestones WHERE id=? AND user_id=?")
     .bind(milestoneId, userId).first<OwnedMilestone>();
-}
-
-export function findOwnedCosmetic(userId: string, cosmeticId: string) {
-  return db.prepare("SELECT c.id,c.kind FROM cosmetics c JOIN user_cosmetics u ON u.cosmetic_id=c.id WHERE c.id=? AND u.user_id=?")
-    .bind(cosmeticId, userId).first<OwnedCosmetic>();
 }
 
 export function deleteDailyCompletion(userId: string, completionId: string) {

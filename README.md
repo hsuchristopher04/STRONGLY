@@ -1,6 +1,12 @@
 # STRONGLY
 
-Fantasy RPG productivity app built with standard Next.js, PostgreSQL, and passwordless email authentication. The production architecture is compatible with Azure App Service or Azure Container Apps.
+Fantasy RPG productivity app built with standard Next.js, PostgreSQL, and passwordless email authentication. The application is provider-neutral and can run on Vercel, Azure, Render, or any Node.js host with access to PostgreSQL.
+
+Weekly campaigns follow each user’s saved timezone and run Sunday through Saturday. Users plan exactly three repeating required daily quests, up to two day-specific bonus quests, and one to three weekly quests. The following week is always available for advance planning.
+
+## Prestige progression
+
+Every completed daily quest, required or bonus, awards 3 prestige points. Reopening a quest reverses those points. Weekly quests and milestones track progress but do not award prestige points. Current prestige thresholds are 1,000, 10,000, 100,000, and 1,000,000 lifetime points. Prestige records rank and long-term consistency; it does not change the website theme.
 
 ## Requirements
 
@@ -10,11 +16,30 @@ Fantasy RPG productivity app built with standard Next.js, PostgreSQL, and passwo
 
 ## Local setup
 
-1. Copy `.env.example` to `.env.local` and set `DATABASE_URL`.
-2. Create the database schema with `npm run db:migrate`.
-3. Start the app with `npm run dev`.
+1. Create a free Neon project and copy its pooled PostgreSQL connection string, or use a local PostgreSQL database.
+2. Copy `.env.example` to `.env.local` and replace `DATABASE_URL` with that connection string. Never commit this file.
+3. Create the database schema with `npm run db:migrate`.
+4. Start the app with `npm run dev`.
+
+```powershell
+Copy-Item .env.example .env.local
+npm run db:migrate
+npm run dev
+```
+
+Confirm connectivity at `http://localhost:3000/api/health/database`. A successful response is:
+
+```json
+{ "status": "ok", "database": "available" }
+```
 
 On localhost, verification codes are shown on the sign-in screen. Resend is only used outside localhost.
+
+## Recommended first deployment
+
+Deploy the Next.js application from GitHub to Vercel and add the same `DATABASE_URL` and `DATABASE_SSL=true` values in the Vercel project settings. Add `RESEND_API_KEY` and `AUTH_FROM_EMAIL` when real email delivery is ready, then run the migration once against the production database.
+
+The database layer uses standard PostgreSQL rather than provider-specific APIs, so moving from Neon to Azure or another PostgreSQL host later only requires changing `DATABASE_URL`.
 
 ## Commands
 
@@ -28,7 +53,7 @@ On localhost, verification codes are shown on the sign-in screen. Resend is only
 
 Migrations run in filename order, are recorded in `strongly_migrations`, and are protected by SHA-256 checksums so an already-applied migration cannot be silently changed. Use `/api/health/database` to verify application-to-database connectivity without exposing database details.
 
-## Azure deployment
+## Optional Azure deployment
 
 Create an Azure Database for PostgreSQL Flexible Server and an Azure App Service using a supported Node.js runtime. Configure these App Service settings:
 

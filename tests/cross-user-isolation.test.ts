@@ -9,7 +9,6 @@ import {
   findDailyCompletion,
   findDailyQuest,
   findMilestone,
-  findOwnedCosmetic,
   findWeeklyQuest,
   updateMilestoneCompletion,
   updateProfile,
@@ -21,21 +20,22 @@ async function databaseFixture() {
   const adapter = memory.adapters.createPg();
   const pool = new adapter.Pool() as unknown as Pool;
   setDatabasePool(pool);
-  const migration = await readFile(new URL("../drizzle/0000_azure_postgres.sql", import.meta.url), "utf8");
-  await pool.query(migration);
+  const migrations = await Promise.all([
+    readFile(new URL("../drizzle/0000_azure_postgres.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0001_prestige_system.sql", import.meta.url), "utf8"),
+  ]);
+  for (const migration of migrations) await pool.query(migration);
   await db.batch([
-    db.prepare("INSERT INTO users (id,email,display_name,timezone,equipped_theme,equipped_badge,created_at) VALUES (?,?,?,?,?,?,?)").bind("user_a", "a@example.com", "A", "America/New_York", "obsidian", "founder", "now"),
-    db.prepare("INSERT INTO users (id,email,display_name,timezone,equipped_theme,equipped_badge,created_at) VALUES (?,?,?,?,?,?,?)").bind("user_b", "b@example.com", "B", "America/Chicago", "obsidian", "founder", "now"),
+    db.prepare("INSERT INTO users (id,email,display_name,timezone,created_at) VALUES (?,?,?,?,?)").bind("user_a", "a@example.com", "A", "America/New_York", "now"),
+    db.prepare("INSERT INTO users (id,email,display_name,timezone,created_at) VALUES (?,?,?,?,?)").bind("user_b", "b@example.com", "B", "America/Chicago", "now"),
     db.prepare("INSERT INTO weeks (id,user_id,starts_on,ends_on,status) VALUES (?,?,?,?,?)").bind("week_a", "user_a", "2026-07-26", "2026-08-01", "active"),
     db.prepare("INSERT INTO weeks (id,user_id,starts_on,ends_on,status) VALUES (?,?,?,?,?)").bind("week_b", "user_b", "2026-07-26", "2026-08-01", "active"),
-    db.prepare("INSERT INTO daily_quests (id,week_id,user_id,title,kind,reward,position) VALUES (?,?,?,?,?,?,?)").bind("daily_a", "week_a", "user_a", "A daily", "required", 10, 0),
-    db.prepare("INSERT INTO daily_quests (id,week_id,user_id,title,kind,reward,position) VALUES (?,?,?,?,?,?,?)").bind("daily_b", "week_b", "user_b", "B daily", "required", 10, 0),
+    db.prepare("INSERT INTO daily_quests (id,week_id,user_id,title,kind,position) VALUES (?,?,?,?,?,?)").bind("daily_a", "week_a", "user_a", "A daily", "required", 0),
+    db.prepare("INSERT INTO daily_quests (id,week_id,user_id,title,kind,position) VALUES (?,?,?,?,?,?)").bind("daily_b", "week_b", "user_b", "B daily", "required", 0),
     db.prepare("INSERT INTO daily_completions (id,quest_id,user_id,completed_on,completed_at) VALUES (?,?,?,?,?)").bind("completion_b", "daily_b", "user_b", "2026-07-31", "now"),
-    db.prepare("INSERT INTO weekly_quests (id,week_id,user_id,title,reward,position) VALUES (?,?,?,?,?,?)").bind("weekly_b", "week_b", "user_b", "B weekly", 100, 0),
+    db.prepare("INSERT INTO weekly_quests (id,week_id,user_id,title,position) VALUES (?,?,?,?,?)").bind("weekly_b", "week_b", "user_b", "B weekly", 0),
     db.prepare("INSERT INTO goals (id,user_id,title,description,status) VALUES (?,?,?,?,?)").bind("goal_b", "user_b", "B goal", "", "active"),
-    db.prepare("INSERT INTO milestones (id,goal_id,user_id,title,position,reward) VALUES (?,?,?,?,?,?)").bind("milestone_b", "goal_b", "user_b", "B milestone", 0, 150),
-    db.prepare("INSERT INTO cosmetics (id,name,kind,price,description) VALUES (?,?,?,?,?)").bind("forest", "Forest", "theme", 500, ""),
-    db.prepare("INSERT INTO user_cosmetics (user_id,cosmetic_id,purchased_at) VALUES (?,?,?)").bind("user_b", "forest", "now"),
+    db.prepare("INSERT INTO milestones (id,goal_id,user_id,title,position) VALUES (?,?,?,?,?)").bind("milestone_b", "goal_b", "user_b", "B milestone", 0),
   ]);
 }
 
@@ -47,7 +47,6 @@ test("ownership lookups reject every cross-user resource", async () => {
   assert.equal(await findDailyCompletion("user_a", "daily_b", "2026-07-31"), null);
   assert.equal(await findWeeklyQuest("user_a", "weekly_b"), null);
   assert.equal(await findMilestone("user_a", "milestone_b"), null);
-  assert.equal(await findOwnedCosmetic("user_a", "forest"), null);
   assert.ok(await findDailyQuest("user_b", "daily_b"));
   assert.ok(await findWeeklyQuest("user_b", "weekly_b"));
 });

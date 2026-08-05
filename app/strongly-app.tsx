@@ -1,63 +1,66 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 type Identity = { email: string; displayName: string; fullName: string | null };
-type Section = "Today" | "Week" | "Goals" | "History" | "Shop" | "Settings";
-type Quest = { id: string; title: string; reward: number; complete: boolean; kind?: "required" | "bonus" };
-type Milestone = { id: string; title: string; reward: number; complete: boolean; position: number };
+type Section = "Today" | "Week" | "Goals" | "History" | "Prestige" | "Settings";
+type Quest = { id: string; title: string; complete: boolean; kind?: "required" | "bonus"; day_index?: number | null; position?: number };
+type Milestone = { id: string; title: string; complete: boolean; position: number };
 type Goal = { id: string; title: string; description: string; target_date: string | null; milestones: Milestone[] };
-type Profile = { email: string; displayName: string; timezone: string; equippedTheme: string; equippedBadge: string };
+type Profile = { email: string; displayName: string; timezone: string };
+type Prestige = { points: number; level: number; title: string; nextThreshold: number | null; nextTitle: string | null; progress: number; tiers: Array<{ level: number; threshold: number; title: string }> };
+type PlannerWeek = { id: string; startsOn: string; endsOn: string; status: string; required: Quest[]; bonus: Array<{ dayIndex: number; quests: Quest[] }>; weekly: Quest[]; days: Array<{ dayIndex: number; date: string; requiredComplete: number; active: boolean }> };
+type HistoryWeek = { id: string; startsOn: string; endsOn: string; days: Array<{ date: string; requiredComplete: number; strong: boolean }>; strongDays: number; weeklyCompleted: number; weeklyAssigned: number; pointsEarned: number; rank: string };
+type CampaignHistory = { summary: { currentStreak: number; strongDays: number; lifetimePoints: number }; weeks: HistoryWeek[] };
 type CampaignState = {
   profile: Profile;
   campaign: { today: string; start: string; end: string };
   daily: Quest[];
   weekly: Quest[];
   goals: Goal[];
-  owned: string[];
-  balance: number;
+  prestige: Prestige;
+  planner: PlannerWeek[];
+  history: CampaignHistory;
 };
 
 const requiredSeed: Quest[] = [
-  { id: "train", title: "Train for 30 minutes", reward: 10, complete: true, kind: "required" },
-  { id: "plan", title: "Plan tomorrow before 9 PM", reward: 10, complete: true, kind: "required" },
-  { id: "read", title: "Read 20 pages", reward: 10, complete: false, kind: "required" },
+  { id: "train", title: "Train for 30 minutes", complete: true, kind: "required" },
+  { id: "plan", title: "Plan tomorrow before 9 PM", complete: true, kind: "required" },
+  { id: "read", title: "Read 20 pages", complete: false, kind: "required" },
 ];
 const bonusSeed: Quest[] = [
-  { id: "water", title: "Drink 8 glasses of water", reward: 15, complete: true, kind: "bonus" },
-  { id: "walk", title: "Take a 20 minute walk", reward: 15, complete: false, kind: "bonus" },
+  { id: "water", title: "Drink 8 glasses of water", complete: true, kind: "bonus" },
+  { id: "walk", title: "Take a 20 minute walk", complete: false, kind: "bonus" },
 ];
 const weekSeed: Quest[] = [
-  { id: "portfolio", title: "Finish portfolio case study", reward: 100, complete: false },
-  { id: "mealprep", title: "Meal prep for next week", reward: 100, complete: true },
-];
-
-const days = [
-  { day: "SUN", date: "26", score: 3 }, { day: "MON", date: "27", score: 3 },
-  { day: "TUE", date: "28", score: 2 }, { day: "WED", date: "29", score: 2, active: true },
-  { day: "THU", date: "30", score: 0 }, { day: "FRI", date: "31", score: 0 },
-  { day: "SAT", date: "01", score: 0 },
+  { id: "portfolio", title: "Finish portfolio case study", complete: false },
+  { id: "mealprep", title: "Meal prep for next week", complete: true },
 ];
 
 const nav: { name: Section; icon: string }[] = [
   { name: "Today", icon: "✦" }, { name: "Week", icon: "▦" }, { name: "Goals", icon: "◆" },
-  { name: "History", icon: "◷" }, { name: "Shop", icon: "◈" }, { name: "Settings", icon: "⚙" },
+  { name: "History", icon: "◷" }, { name: "Prestige", icon: "✦" }, { name: "Settings", icon: "⚙" },
 ];
+
+function dateFromIso(value: string) { return new Date(`${value}T12:00:00Z`); }
+function formatShortDate(value: string) { return dateFromIso(value).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }); }
+function formatDay(value: string) { return dateFromIso(value).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" }).toUpperCase(); }
+function formatLongDate(value: string) { return dateFromIso(value).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" }).toUpperCase(); }
 
 export default function StronglyApp({ identity }: { identity: Identity }) {
   const [section, setSection] = useState<Section>("Today");
   const [required, setRequired] = useState(requiredSeed);
   const [bonus, setBonus] = useState(bonusSeed);
   const [weekly, setWeekly] = useState(weekSeed);
-  const [coins, setCoins] = useState(450);
   const [toast, setToast] = useState("");
-  const [owned, setOwned] = useState(["obsidian", "founder"]);
-  const [theme, setTheme] = useState("obsidian");
-  const [profile, setProfile] = useState<Profile>({ email: identity.email, displayName: identity.fullName ?? "Hero", timezone: "America/New_York", equippedTheme: "obsidian", equippedBadge: "founder" });
+  const [profile, setProfile] = useState<Profile>({ email: identity.email, displayName: identity.fullName ?? "Hero", timezone: "America/New_York" });
+  const [prestige, setPrestige] = useState<Prestige>({ points: 0, level: 0, title: "Unprestiged", nextThreshold: 1_000, nextTitle: "Iron Resolve", progress: 0, tiers: [] });
   const [goals, setGoals] = useState<Goal[]>([]);
   const [today, setToday] = useState(new Date().toISOString().slice(0, 10));
   const [loading, setLoading] = useState(true);
   const [mobileNav, setMobileNav] = useState(false);
+  const [planner, setPlanner] = useState<PlannerWeek[]>([]);
+  const [history, setHistory] = useState<CampaignHistory>({ summary: { currentStreak: 0, strongDays: 0, lifetimePoints: 0 }, weeks: [] });
   const requiredDone = required.filter((q) => q.complete).length;
   const progress = Math.round((requiredDone / 3) * 100);
 
@@ -67,10 +70,10 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
     setBonus(state.daily.filter((quest) => quest.kind === "bonus"));
     setWeekly(state.weekly);
     setGoals(state.goals);
-    setOwned(state.owned);
-    setTheme(state.profile.equippedTheme);
-    setCoins(state.balance);
+    setPrestige(state.prestige);
     setToday(state.campaign.today);
+    setPlanner(state.planner);
+    setHistory(state.history);
   }
 
   useEffect(() => {
@@ -84,7 +87,7 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
       .finally(() => setLoading(false));
   }, []);
 
-  async function post(action: Record<string, string>) {
+  async function post(action: Record<string, unknown>) {
     const response = await fetch("/api/campaign", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(action),
     });
@@ -97,12 +100,8 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
     const setter = group === "required" ? setRequired : group === "bonus" ? setBonus : setWeekly;
     const source = group === "required" ? required : group === "bonus" ? bonus : weekly;
     const quest = source.find((item) => item.id === id)!;
-    const delta = quest.complete ? -quest.reward : quest.reward;
-    const strongDayDelta = group === "required" && !quest.complete && requiredDone === 2 ? 20 :
-      group === "required" && quest.complete && requiredDone === 3 ? -20 : 0;
     setter(source.map((item) => item.id === id ? { ...item, complete: !item.complete } : item));
-    setCoins((value) => value + delta + strongDayDelta);
-    setToast(quest.complete ? `${quest.title} reopened` : `Quest complete · +${quest.reward + strongDayDelta} coins`);
+    setToast(quest.complete ? `${quest.title} reopened` : group === "weekly" ? "Weekly quest complete" : "Quest complete · +3 prestige points");
     try {
       await post(group === "weekly" ? { type: "toggle-weekly", questId: id } : { type: "toggle-daily", questId: id, completedOn: today });
     } catch (error) {
@@ -111,22 +110,6 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
       if (response.ok) applyState(await response.json() as CampaignState);
     }
     window.setTimeout(() => setToast(""), 2400);
-  }
-
-  async function buy(id: string, price: number) {
-    try {
-      if (owned.includes(id)) {
-        await post({ type: "equip", cosmeticId: id });
-        setToast("Cosmetic equipped");
-      } else if (coins >= price) {
-        await post({ type: "purchase", cosmeticId: id });
-        await post({ type: "equip", cosmeticId: id });
-        setToast("New cosmetic unlocked");
-      } else setToast(`You need ${price - coins} more coins`);
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "Unable to update cosmetic");
-    }
-    window.setTimeout(() => setToast(""), 2200);
   }
 
   async function toggleMilestone(id: string) {
@@ -150,27 +133,26 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
   }
 
   const content = useMemo(() => {
-    if (section === "Today") return <Today required={required} bonus={bonus} weekly={weekly} progress={progress} toggleQuest={toggleQuest} />;
-    if (section === "Week") return <WeekView required={required} />;
+    if (section === "Today") return <Today required={required} bonus={bonus} weekly={weekly} progress={progress} toggleQuest={toggleQuest} today={today} week={planner[0]} displayName={profile.displayName} />;
+    if (section === "Week") return <WeekView weeks={planner} savePlan={async (plan) => { try { await post({ type: "plan-week", ...plan }); setToast("Next campaign saved"); } catch (error) { setToast(error instanceof Error ? error.message : "Unable to save week"); } }} />;
     if (section === "Goals") return <Goals goals={goals} toggleMilestone={toggleMilestone} />;
-    if (section === "History") return <History />;
-    if (section === "Shop") return <Shop coins={coins} owned={owned} theme={theme} buy={buy} />;
+    if (section === "History") return <History history={history} />;
+    if (section === "Prestige") return <PrestigeView prestige={prestige} />;
     return <Settings key={`${profile.displayName}:${profile.timezone}`} profile={profile} saveProfile={saveProfile} />;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [section, required, bonus, weekly, progress, coins, owned, theme]);
+  }, [section, required, bonus, weekly, progress, prestige, planner, history, today, profile]);
 
   return (
-    <div className={`app-shell theme-${theme}`}>
+    <div className="app-shell theme-obsidian">
       <aside className={mobileNav ? "sidebar open" : "sidebar"}>
         <div className="brand">STRONGLY<span>.</span></div>
         <div className="profile">
           <div className="avatar">C</div>
-          <div><b>{identity.fullName?.split(" ")[0] ?? "Hero"}</b><span><i /> Level 7 · Pathfinder</span></div>
+          <div><b>{identity.fullName?.split(" ")[0] ?? "Hero"}</b><span><i /> Prestige {prestige.level} · {prestige.title}</span></div>
         </div>
         <nav aria-label="Primary navigation">
           <p>YOUR CAMPAIGN</p>
           {nav.slice(0, 4).map((item) => <button key={item.name} className={section === item.name ? "active" : ""} onClick={() => { setSection(item.name); setMobileNav(false); }}><i>{item.icon}</i>{item.name}</button>)}
-          <p>CUSTOMIZE</p>
           {nav.slice(4).map((item) => <button key={item.name} className={section === item.name ? "active" : ""} onClick={() => { setSection(item.name); setMobileNav(false); }}><i>{item.icon}</i>{item.name}</button>)}
         </nav>
         <div className="sidebar-quote"><span>✦</span><p>“We are what we repeatedly do.”</p><small>— Aristotle</small></div>
@@ -178,8 +160,8 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
       <div className="main-wrap">
         <header className="topbar">
           <button className="menu-button" aria-label="Open navigation" onClick={() => setMobileNav(!mobileNav)}>☰</button>
-          <div className="week-title"><small>THIS CAMPAIGN</small><b>Week of July 26 – Aug 1</b></div>
-          <div className="top-actions"><div className="streak"><span>♨</span><b>4</b><small>DAY STREAK</small></div><div className="coin"><span>◈</span><b>{coins}</b><small>COINS</small></div><button className="round" aria-label="Notifications">♟<i /></button></div>
+          <div className="week-title"><small>THIS CAMPAIGN</small><b>{planner[0] ? `${formatShortDate(planner[0].startsOn)} – ${formatShortDate(planner[0].endsOn)}` : "Loading week…"}</b></div>
+          <div className="top-actions"><div className="streak"><span>♨</span><b>{history.summary.currentStreak}</b><small>DAY STREAK</small></div><div className="prestige-chip"><span>✦</span><b>{prestige.points.toLocaleString()}</b><small>PRESTIGE POINTS</small></div><button className="round" aria-label="Notifications">♟<i /></button></div>
         </header>
         <main className="app-main">{content}</main>
       </div>
@@ -191,21 +173,21 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
 
 function QuestRow({ quest, onToggle }: { quest: Quest; onToggle: () => void }) {
   return <button className={`quest-row ${quest.complete ? "complete" : ""}`} onClick={onToggle} aria-label={`${quest.complete ? "Reopen" : "Complete"} ${quest.title}`}>
-    <i className="check">{quest.complete ? "✓" : ""}</i><span className="quest-copy"><b>{quest.title}</b><small>{quest.kind === "bonus" ? "Bonus quest" : quest.kind === "required" ? "Required quest" : "Weekly quest"}</small></span><span className="reward">+{quest.reward} <em>◈</em></span>
+    <i className="check">{quest.complete ? "✓" : ""}</i><span className="quest-copy"><b>{quest.title}</b><small>{quest.kind === "bonus" ? "Bonus quest" : quest.kind === "required" ? "Required quest" : "Weekly quest"}</small></span>{quest.kind && <span className="quest-points">+3 <em>PP</em></span>}
   </button>;
 }
 
-function Today({ required, bonus, weekly, progress, toggleQuest }: { required: Quest[]; bonus: Quest[]; weekly: Quest[]; progress: number; toggleQuest: (g: "required" | "bonus" | "weekly", id: string) => void }) {
+function Today({ required, bonus, weekly, progress, toggleQuest, today, week, displayName }: { required: Quest[]; bonus: Quest[]; weekly: Quest[]; progress: number; toggleQuest: (g: "required" | "bonus" | "weekly", id: string) => void; today: string; week?: PlannerWeek; displayName: string }) {
   return <>
-    <section className="welcome"><div><p className="eyebrow">WEDNESDAY · JULY 29</p><h1>Good afternoon, <em>Chris.</em></h1><p>Two quests down. Finish strong and claim your Strong Day bonus.</p></div><div className="rank-seal"><span>VII</span><small>PATHFINDER</small></div></section>
-    <section className="day-strip">{days.map((day) => <div className={day.active ? "active" : ""} key={day.day}><small>{day.day}</small><b>{day.date}</b><span>{day.score ? `${day.score}/3` : "—"}</span></div>)}</section>
+    <section className="welcome"><div><p className="eyebrow">{formatLongDate(today)}</p><h1>Good afternoon, <em>{displayName}.</em></h1><p>{required.filter((quest) => quest.complete).length === 3 ? "Strong Day secured. Keep the momentum going." : "Finish your three required quests and strengthen today’s record."}</p></div><div className="rank-seal"><span>✦</span><small>BUILD PRESTIGE</small></div></section>
+    <section className="day-strip">{week?.days.map((day) => <div className={day.active ? "active" : ""} key={day.date}><small>{formatDay(day.date)}</small><b>{dateFromIso(day.date).getUTCDate()}</b><span>{day.date <= today ? `${day.requiredComplete}/3` : "—"}</span></div>)}</section>
     <div className="dashboard-grid">
       <section className="panel daily-panel">
         <header className="panel-title"><div><p className="eyebrow">DAILY QUESTS</p><h2>Today’s path</h2></div><b>{required.filter(q => q.complete).length}<span>/3</span></b></header>
         <div className="progress"><span style={{ width: `${progress}%` }} /></div>
-        <div className="strong-bonus"><span>✦</span><div><b>Strong Day Bonus</b><small>Complete all 3 required quests</small></div><em>+20 ◈</em></div>
+        <div className="strong-bonus"><span>✦</span><div><b>Strong Day</b><small>Complete all 3 required quests</small></div><em>{required.filter((quest) => quest.complete).length === 3 ? "SECURED" : "IN PROGRESS"}</em></div>
         <div className="quest-list">{required.map((q) => <QuestRow key={q.id} quest={q} onToggle={() => toggleQuest("required", q.id)} />)}</div>
-        <div className="subheading"><span>BONUS QUESTS</span><small>EXTRA COINS</small></div>
+        <div className="subheading"><span>BONUS QUESTS</span><small>MORE PRESTIGE</small></div>
         <div className="quest-list compact">{bonus.map((q) => <QuestRow key={q.id} quest={q} onToggle={() => toggleQuest("bonus", q.id)} />)}</div>
       </section>
       <aside className="side-stack">
@@ -216,11 +198,27 @@ function Today({ required, bonus, weekly, progress, toggleQuest }: { required: Q
   </>;
 }
 
-function WeekView({ required }: { required: Quest[] }) {
-  return <section className="page-section"><PageHeader eyebrow="WEEKLY CALENDAR" title="Your campaign map" copy="Every strong week starts with a clear path." button="Plan next week" />
-    <div className="week-grid">{days.map((day, i) => <article className={`panel day-card ${day.active ? "active" : ""}`} key={day.day}><header><small>{day.day}</small><b>{day.date}</b></header>{required.map((q, qi) => <div key={q.id}><i className={(i < 2 || (i === 2 && qi < 2) || (i === 3 && q.complete)) ? "done" : ""}>{(i < 2 || (i === 2 && qi < 2) || (i === 3 && q.complete)) ? "✓" : ""}</i><span>{q.title}</span></div>)}<footer>{day.score === 3 ? "✦ Strong Day" : day.score ? `${day.score}/3 complete` : "Upcoming"}</footer></article>)}</div>
-    <section className="panel planning-note"><span>✦</span><div><h3>Prepare the next campaign</h3><p>Next week opens for planning every Thursday. Choose three repeating daily quests and up to three weekly objectives.</p></div><button className="button button-gold">Start planning</button></section>
+function WeekView({ weeks, savePlan }: { weeks: PlannerWeek[]; savePlan: (plan: { startsOn: string; required: string[]; bonus: Array<{ dayIndex: number; titles: string[] }>; weekly: string[] }) => Promise<void> }) {
+  const current = weeks[0];
+  const next = weeks[1];
+  return <section className="page-section"><PageHeader eyebrow="WEEKLY CALENDAR" title="Your campaign map" copy="Your quests now follow the calendar in your saved timezone." />
+    {current && <div className="week-grid">{current.days.map((day) => <article className={`panel day-card ${day.active ? "active" : ""}`} key={day.date}><header><small>{formatDay(day.date)}</small><b>{dateFromIso(day.date).getUTCDate()}</b></header>{current.required.map((quest) => <div key={quest.id}><i className={day.requiredComplete === 3 ? "done" : ""}>{day.requiredComplete === 3 ? "✓" : ""}</i><span>{quest.title}</span></div>)}{current.bonus.find((item) => item.dayIndex === day.dayIndex)?.quests.map((quest) => <div className="bonus-line" key={quest.id}><i>+</i><span>{quest.title}</span></div>)}<footer>{day.requiredComplete === 3 ? "✦ Strong Day" : day.date < (current.days.find((item) => item.active)?.date ?? "") ? `${day.requiredComplete}/3 complete` : day.active ? `${day.requiredComplete}/3 today` : "Upcoming"}</footer></article>)}</div>}
+    {next && <WeekPlanForm key={next.id} week={next} savePlan={savePlan} />}
   </section>;
+}
+
+function WeekPlanForm({ week, savePlan }: { week: PlannerWeek; savePlan: (plan: { startsOn: string; required: string[]; bonus: Array<{ dayIndex: number; titles: string[] }>; weekly: string[] }) => Promise<void> }) {
+  const [required, setRequired] = useState(() => Array.from({ length: 3 }, (_, index) => week.required[index]?.title ?? ""));
+  const [weekly, setWeekly] = useState(() => Array.from({ length: 3 }, (_, index) => week.weekly[index]?.title ?? ""));
+  const [bonus, setBonus] = useState(() => Array.from({ length: 7 }, (_, dayIndex) => Array.from({ length: 2 }, (_, index) => week.bonus.find((day) => day.dayIndex === dayIndex)?.quests[index]?.title ?? "")));
+  const [saving, setSaving] = useState(false);
+  const update = (values: string[], index: number, value: string) => values.map((item, itemIndex) => itemIndex === index ? value : item);
+  async function submit(event: FormEvent) { event.preventDefault(); setSaving(true); await savePlan({ startsOn: week.startsOn, required, weekly: weekly.filter((title) => title.trim()), bonus: bonus.map((titles, dayIndex) => ({ dayIndex, titles: titles.filter((title) => title.trim()) })) }); setSaving(false); }
+  return <form className="panel week-planner" onSubmit={submit}><header><div><p className="eyebrow">PLAN AHEAD</p><h2>Next campaign · {formatShortDate(week.startsOn)} – {formatShortDate(week.endsOn)}</h2><p>Set three quests that repeat daily, optional day-specific bonuses, and one to three weekly objectives.</p></div><button className="button button-gold" disabled={saving}>{saving ? "Saving…" : "Save next week"}</button></header>
+    <section><h3>Required daily quests <span>Exactly 3</span></h3><div className="planner-required">{required.map((title, index) => <label key={index}><small>QUEST {index + 1}</small><input required maxLength={120} value={title} onChange={(event) => setRequired(update(required, index, event.target.value))} placeholder={index === 0 ? "Exercise for 30 minutes" : index === 1 ? "Plan tomorrow" : "Read for 20 minutes"} /></label>)}</div></section>
+    <section><h3>Daily bonus quests <span>Up to 2 each day</span></h3><div className="planner-bonus">{week.days.map((day) => <div key={day.date}><b>{formatDay(day.date)} <small>{formatShortDate(day.date)}</small></b>{bonus[day.dayIndex].map((title, index) => <input key={index} maxLength={120} value={title} onChange={(event) => setBonus(bonus.map((titles, dayIndex) => dayIndex === day.dayIndex ? update(titles, index, event.target.value) : titles))} placeholder={`Bonus slot ${index + 1}`} />)}</div>)}</div></section>
+    <section><h3>Weekly quests <span>Choose 1–3</span></h3><div className="planner-required">{weekly.map((title, index) => <label key={index}><small>{index === 0 ? "REQUIRED" : `OPTIONAL ${index}`}</small><input required={index === 0} maxLength={120} value={title} onChange={(event) => setWeekly(update(weekly, index, event.target.value))} placeholder={index === 0 ? "Complete the week’s main objective" : "Additional weekly quest"} /></label>)}</div></section>
+  </form>;
 }
 
 function Goals({ goals, toggleMilestone }: { goals: Goal[]; toggleMilestone: (id: string) => void }) {
@@ -229,37 +227,25 @@ function Goals({ goals, toggleMilestone }: { goals: Goal[]; toggleMilestone: (id
   const doneCount = milestones.filter((item) => item.complete).length;
   return <section className="page-section"><PageHeader eyebrow="LONG-TERM GOALS" title="Build your legend" copy="Break ambitious goals into milestones you can conquer." button="+ New goal" />
     <div className="goals-grid">
-      <article className="panel featured-goal"><div className="goal-rune">◆</div><div className="goal-meta"><span>ACTIVE · FITNESS</span><small>Target: {goal?.target_date ?? "No date"}</small></div><h2>{goal?.title ?? "Your first long-term goal"}</h2><p>{goal?.description ?? "Create a goal and divide it into achievable milestones."}</p><div className="goal-progress large"><span style={{ width: `${milestones.length ? (doneCount / milestones.length) * 100 : 0}%` }} /></div><b>{doneCount} of {milestones.length} milestones complete</b><div className="milestones">{milestones.map((item, i) => <button className={item.complete ? "done" : ""} key={item.id} onClick={() => toggleMilestone(item.id)}><i>{item.complete ? "✓" : i + 1}</i><span>{item.title}<small>{item.complete ? "Completed" : i === 3 ? "Linked to this week’s quest" : "+150 coins"}</small></span><em>{item.complete ? "DONE" : "+150 ◈"}</em></button>)}</div></article>
+      <article className="panel featured-goal"><div className="goal-rune">◆</div><div className="goal-meta"><span>ACTIVE · FITNESS</span><small>Target: {goal?.target_date ?? "No date"}</small></div><h2>{goal?.title ?? "Your first long-term goal"}</h2><p>{goal?.description ?? "Create a goal and divide it into achievable milestones."}</p><div className="goal-progress large"><span style={{ width: `${milestones.length ? (doneCount / milestones.length) * 100 : 0}%` }} /></div><b>{doneCount} of {milestones.length} milestones complete</b><div className="milestones">{milestones.map((item, i) => <button className={item.complete ? "done" : ""} key={item.id} onClick={() => toggleMilestone(item.id)}><i>{item.complete ? "✓" : i + 1}</i><span>{item.title}<small>{item.complete ? "Completed" : i === 3 ? "Linked to this week’s quest" : "Milestone"}</small></span><em>{item.complete ? "DONE" : "OPEN"}</em></button>)}</div></article>
       <aside><article className="panel goal-mini"><span>◇</span><small>LEARNING · DEC 31</small><h3>Read 24 books this year</h3><div className="goal-progress"><span style={{ width: "67%" }} /></div><footer><b>16 of 24 books</b><span>67%</span></footer></article><article className="panel new-goal"><i>＋</i><h3>Begin another journey</h3><p>Turn your next ambition into clear, achievable milestones.</p><button className="text-button">Create a goal →</button></article></aside>
     </div>
   </section>;
 }
 
-function History() {
-  const weeks = [
-    { label: "Jul 19 – 25", days: 6, weekly: "2/2", coins: 430, rank: "Legendary" },
-    { label: "Jul 12 – 18", days: 5, weekly: "2/3", coins: 355, rank: "Strong" },
-    { label: "Jul 5 – 11", days: 4, weekly: "1/2", coins: 275, rank: "Steady" },
-    { label: "Jun 28 – Jul 4", days: 6, weekly: "3/3", coins: 535, rank: "Legendary" },
-  ];
+function History({ history }: { history: CampaignHistory }) {
+  const { summary, weeks } = history;
   return <section className="page-section"><PageHeader eyebrow="CAMPAIGN ARCHIVE" title="The record of your strength" copy="Every completed quest is proof that you showed up." />
-    <section className="history-stats"><article><span>♨</span><div><small>CURRENT STREAK</small><b>4 days</b></div></article><article><span>✦</span><div><small>STRONG DAYS</small><b>21 total</b></div></article><article><span>◈</span><div><small>LIFETIME COINS</small><b>2,840</b></div></article></section>
-    <div className="history-list">{weeks.map((week, i) => <article className="panel history-row" key={week.label}><div className="week-number"><small>WEEK</small><b>{30 - i}</b></div><div><small>DATE</small><b>{week.label}</b></div><div className="day-dots"><small>STRONG DAYS</small><span>{[0,1,2,3,4,5,6].map(x => <i className={x < week.days ? "done" : ""} key={x} />)}</span><b>{week.days}/7</b></div><div><small>WEEKLY QUESTS</small><b>{week.weekly}</b></div><div><small>COINS EARNED</small><b className="gold">+{week.coins} ◈</b></div><em>{week.rank}</em></article>)}</div>
+    <section className="history-stats"><article><span>♨</span><div><small>CURRENT STREAK</small><b>{summary.currentStreak} {summary.currentStreak === 1 ? "day" : "days"}</b></div></article><article><span>✦</span><div><small>STRONG DAYS</small><b>{summary.strongDays} total</b></div></article><article><span>✦</span><div><small>LIFETIME PRESTIGE POINTS</small><b>{summary.lifetimePoints.toLocaleString()}</b></div></article></section>
+    {weeks.length === 0 ? <article className="panel history-empty"><span>◇</span><h2>Your archive begins after this campaign</h2><p>When Saturday closes, this week’s Strong Days, quest results, and prestige points will be preserved here.</p></article> :
+      <div className="history-list">{weeks.map((week, index) => <article className="panel history-row" key={week.id}><div className="week-number"><small>WEEK</small><b>{weeks.length - index}</b></div><div><small>DATE</small><b>{formatShortDate(week.startsOn)} – {formatShortDate(week.endsOn)}</b></div><div className="day-dots"><small>DAILY BREAKDOWN</small><span>{week.days.map((day) => <i className={day.strong ? "done" : day.requiredComplete > 0 ? "partial" : ""} title={`${formatDay(day.date)}: ${day.requiredComplete}/3 required quests`} key={day.date} />)}</span><b>{week.strongDays}/7 strong</b></div><div><small>WEEKLY QUESTS</small><b>{week.weeklyCompleted}/{week.weeklyAssigned}</b></div><div><small>PRESTIGE EARNED</small><b className="gold">{week.pointsEarned >= 0 ? "+" : ""}{week.pointsEarned} PP</b></div><em>{week.rank}</em></article>)}</div>}
   </section>;
 }
 
-function Shop({ coins, owned, theme, buy }: { coins: number; owned: string[]; theme: string; buy: (id: string, price: number) => void }) {
-  const items = [
-    { id: "forest", name: "Emerald Keep", type: "Theme", price: 500, desc: "Deep forest tones and ancient gold.", color: "#174735" },
-    { id: "royal", name: "Royal Vanguard", type: "Theme", price: 750, desc: "Regal plum with polished brass.", color: "#422744" },
-    { id: "ember", name: "Emberforge", type: "Theme", price: 1000, desc: "Smoldering crimson and warm iron.", color: "#6f3023" },
-    { id: "early", name: "Dawn Walker", type: "Badge", price: 250, desc: "For heroes who begin before sunrise.", color: "#aa6d28" },
-    { id: "steadfast", name: "The Steadfast", type: "Badge", price: 400, desc: "Awarded to the relentlessly consistent.", color: "#334a6a" },
-  ];
-  return <section className="page-section"><PageHeader eyebrow="THE QUARTERMASTER" title="Rewards worthy of the journey" copy="Spend the coins you earned. Every unlock is proof of progress." />
-    <div className="shop-balance"><span>YOUR PURSE</span><b>◈ {coins}</b><small>Earn more by completing quests</small></div>
-    <h3 className="section-label">CURATED THEMES & BADGES</h3>
-    <div className="shop-grid"><article className="shop-item owned panel"><div className="swatch obsidian" /><small>THEME</small><h3>Obsidian Guild</h3><p>The original STRONGLY campaign theme.</p><button disabled>{theme === "obsidian" ? "Equipped" : "Owned"}</button></article>{items.map(item => <article className="shop-item panel" key={item.id}><div className="swatch" style={{ background: item.color }}><span>{item.type === "Badge" ? "✦" : ""}</span></div><small>{item.type.toUpperCase()}</small><h3>{item.name}</h3><p>{item.desc}</p><button onClick={() => buy(item.id, item.price)}>{owned.includes(item.id) ? (theme === item.id ? "Equipped" : "Equip") : `◈ ${item.price}`}</button></article>)}</div>
+function PrestigeView({ prestige }: { prestige: Prestige }) {
+  return <section className="page-section"><PageHeader eyebrow="PRESTIGE PATH" title="Strength measured over time" copy="Every daily quest adds 3 points. Prestige is permanent proof of sustained discipline." />
+    <article className="panel prestige-hero"><div><span>PRESTIGE {prestige.level}</span><h2>{prestige.title}</h2><p>{prestige.points.toLocaleString()} lifetime points</p></div><div className="prestige-next"><small>{prestige.nextThreshold ? `NEXT: ${prestige.nextTitle}` : "MAXIMUM PRESTIGE"}</small><div className="goal-progress large"><span style={{ width: `${prestige.progress}%` }} /></div><b>{prestige.nextThreshold ? `${prestige.points.toLocaleString()} / ${prestige.nextThreshold.toLocaleString()} PP` : "All current tiers achieved"}</b></div></article>
+    <div className="prestige-grid">{prestige.tiers.map((tier) => { const achieved = prestige.points >= tier.threshold; return <article className={`panel prestige-tier ${achieved ? "unlocked" : ""}`} key={tier.level}><span>PRESTIGE {tier.level}</span><div className="prestige-mark">{achieved ? "✓" : tier.level}</div><h3>{tier.title}</h3><b>{tier.threshold.toLocaleString()} PP</b><p>A permanent mark of your long-term consistency.</p><small>{achieved ? "ACHIEVED" : "INCOMPLETE"}</small></article>; })}</div>
   </section>;
 }
 

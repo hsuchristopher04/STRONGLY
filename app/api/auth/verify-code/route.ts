@@ -19,7 +19,7 @@ export async function POST(request: Request) {
   const userId = userIdFor(email);
   const now = new Date().toISOString();
   await env.DB.batch([
-    env.DB.prepare("INSERT INTO users (id,email,display_name,timezone,equipped_theme,equipped_badge,created_at) VALUES (?,?,?,'America/New_York','obsidian','founder',?) ON CONFLICT(email) DO NOTHING").bind(userId, email, email.split("@")[0], now),
+    env.DB.prepare("INSERT INTO users (id,email,display_name,timezone,created_at) VALUES (?,?,?,'America/New_York',?) ON CONFLICT(email) DO NOTHING").bind(userId, email, email.split("@")[0], now),
     env.DB.prepare("UPDATE auth_codes SET consumed_at=? WHERE id=?").bind(now, item.id),
   ]);
   const session = await createSession(userId);

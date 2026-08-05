@@ -18,7 +18,7 @@ export default async function Home() {
           <div className="hero-copy">
             <p className="eyebrow">A WEEKLY QUEST SYSTEM</p>
             <h1>Make your<br />week <em>strong.</em></h1>
-            <p>Turn your real priorities into daily quests. Build momentum, earn rewards, and create a record you’ll be proud to look back on.</p>
+            <p>Turn your real priorities into daily quests. Build momentum, earn prestige, and create a record you’ll be proud to look back on.</p>
             <a className="button button-gold" href="/sign-in">Begin your first quest <span>→</span></a>
             <div className="hero-proof"><span>✦</span> Three quests. Seven days. One stronger you.</div>
           </div>
@@ -30,12 +30,12 @@ export default async function Home() {
               <div className="hero-quest" key={quest}><i>{index < 2 ? "✓" : ""}</i><span>{quest}<small>Required · +10</small></span></div>
             ))}
             <div className="hero-progress"><span style={{ width: "67%" }} /></div>
-            <footer><b>2 of 3 complete</b><span>Strong Day +20</span></footer>
+            <footer><b>2 of 3 complete</b><span>Each quest +3 PP</span></footer>
           </div>
         </section>
         <section className="feature-strip">
           <article><b>01</b><h3>Plan the campaign</h3><p>Choose the actions that will make this week count.</p></article>
-          <article><b>02</b><h3>Complete the quests</h3><p>Show up daily and collect coins for real progress.</p></article>
+          <article><b>02</b><h3>Complete the quests</h3><p>Show up daily and build prestige through real progress.</p></article>
           <article><b>03</b><h3>Build your legend</h3><p>Unlock themes, earn badges, and watch your record grow.</p></article>
         </section>
       </main>

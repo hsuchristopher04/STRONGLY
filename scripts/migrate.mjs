@@ -4,6 +4,9 @@ import pg from "pg";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 const connectionString = process.env.DATABASE_URL;
+if (connectionString.includes("your-server.postgres.database.azure.com") || connectionString.includes("replace-me")) {
+  throw new Error("DATABASE_URL still contains example placeholders. Replace it with your real PostgreSQL connection string before migrating.");
+}
 const explicitSsl = process.env.DATABASE_SSL;
 const localHost = ["localhost", "127.0.0.1"].includes(new URL(connectionString).hostname);
 const ssl = explicitSsl === "false" || (explicitSsl !== "true" && localHost) ? false : { rejectUnauthorized: false };

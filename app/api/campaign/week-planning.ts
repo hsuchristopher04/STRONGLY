@@ -2,7 +2,7 @@ export type WeekPlanInput = {
   startsOn: string;
   required: string[];
   bonus: Array<{ dayIndex: number; titles: string[] }>;
-  weekly: string[];
+  weekly: Array<string | { title: string; milestoneId?: string | null }>;
 };
 
 export function localDate(timezone: string, date = new Date()) {
@@ -35,10 +35,14 @@ export function validateWeekPlan(input: WeekPlanInput, today: string) {
   const next = addDays(current, 7);
   if (input.startsOn !== current && input.startsOn !== next) throw new Error("Only the current or following week can be planned");
   const required = cleanTitles(input.required);
-  const weekly = cleanTitles(input.weekly);
+  const weekly = input.weekly.map((quest) => typeof quest === "string"
+    ? { title: quest.trim(), milestoneId: null }
+    : { title: quest.title.trim(), milestoneId: quest.milestoneId?.trim() || null }).filter((quest) => quest.title);
   if (required.length !== 3 || new Set(required.map((title) => title.toLowerCase())).size !== 3) throw new Error("Choose exactly three unique required daily quests");
   if (weekly.length < 1 || weekly.length > 3) throw new Error("Choose between one and three weekly quests");
-  if (required.some((title) => title.length > 120) || weekly.some((title) => title.length > 120)) throw new Error("Quest titles must be 120 characters or fewer");
+  if (required.some((title) => title.length > 120) || weekly.some((quest) => quest.title.length > 120)) throw new Error("Quest titles must be 120 characters or fewer");
+  const linkedMilestones = weekly.map((quest) => quest.milestoneId).filter((id): id is string => Boolean(id));
+  if (new Set(linkedMilestones).size !== linkedMilestones.length) throw new Error("A milestone can only be linked to one weekly quest per campaign");
   const bonus = Array.from({ length: 7 }, (_, dayIndex) => {
     const entries = input.bonus.filter((day) => day.dayIndex === dayIndex).flatMap((day) => cleanTitles(day.titles));
     if (entries.length > 2) throw new Error("Each day can have at most two bonus quests");

@@ -1,9 +1,11 @@
 import { getAuthUser } from "../../auth";
 import { db } from "../../../db";
-import { findDailyQuest, findMilestone, findWeeklyQuest, updateMilestoneCompletion, updateProfile, updateWeeklyCompletion } from "./ownership-store";
-import { addDays, localDate, validateWeekPlan, weekBounds, type WeekPlanInput } from "./week-planning";
+import { findDailyQuest, updateProfile } from "./ownership-store";
+import { addDays, localDate, validateWeekPlan, type WeekPlanInput } from "./week-planning";
 import { prestigeStatus, qualifiesForStrongDay } from "./prestige";
 import { DailyQuestError, toggleDailyQuest } from "./daily-quest-service";
+import { ensureWeekLifecycle } from "./week-lifecycle";
+import { saveWeekPlan, toggleMilestone, toggleWeeklyQuest, WeekPlanError } from "./week-plan-service";
 
 const env = { DB: db };
 
@@ -17,7 +19,7 @@ type Action =
   | ({ type: "plan-week" } & WeekPlanInput);
 
 type QuestRow = { id: string; title: string; kind: "required" | "bonus"; day_index: number | null; position: number; complete: number };
-type WeeklyRow = { id: string; title: string; complete: number };
+type WeeklyRow = { id: string; title: string; milestone_id: string | null; complete: number };
 type MilestoneRow = { id: string; title: string; complete: number; position: number };
 
 async function identity() {
@@ -40,34 +42,7 @@ async function ensureUser(email: string, displayName: string) {
 
 async function seedAccount(userId: string, timezone: string) {
   const today = localDate(timezone);
-  const { start, end } = weekBounds(today);
-  const weekId = `${userId}_${start}`;
-  const nextStart = addDays(start, 7);
-  const nextEnd = addDays(nextStart, 6);
-  const nextWeekId = `${userId}_${nextStart}`;
-  await env.DB.batch([
-    env.DB.prepare("UPDATE weeks SET status='closed' WHERE user_id=? AND ends_on<?").bind(userId, today),
-    env.DB.prepare("INSERT INTO weeks (id,user_id,starts_on,ends_on,status) VALUES (?,?,?,?, 'active') ON CONFLICT DO NOTHING").bind(weekId, userId, start, end),
-    env.DB.prepare("UPDATE weeks SET status='active',ends_on=? WHERE id=? AND user_id=?").bind(end, weekId, userId),
-    env.DB.prepare("INSERT INTO weeks (id,user_id,starts_on,ends_on,status) VALUES (?,?,?,?,'planning') ON CONFLICT DO NOTHING").bind(nextWeekId, userId, nextStart, nextEnd),
-  ]);
-
-  const existing = await env.DB.prepare("SELECT COUNT(*) count FROM daily_quests WHERE week_id=? AND user_id=?").bind(weekId, userId).first<{ count: number }>();
-  if (Number(existing?.count ?? 0) === 0) {
-    await env.DB.batch([
-      ...[
-        ["Train for 30 minutes", "required", null, 0],
-        ["Plan tomorrow before 9 PM", "required", null, 1],
-        ["Read 20 pages", "required", null, 2],
-        ["Drink 8 glasses of water", "bonus", new Date(`${today}T12:00:00Z`).getUTCDay(), 0],
-        ["Take a 20 minute walk", "bonus", new Date(`${today}T12:00:00Z`).getUTCDay(), 1],
-      ].map(([title, kind, day, position]) => env.DB.prepare("INSERT INTO daily_quests (id,week_id,user_id,title,kind,day_index,position) VALUES (?,?,?,?,?,?,?)")
-        .bind(crypto.randomUUID(), weekId, userId, title, kind, day, position)),
-      ...["Finish portfolio case study", "Meal prep for next week"].map((title, position) => env.DB.prepare("INSERT INTO weekly_quests (id,week_id,user_id,title,position) VALUES (?,?,?,?,?)")
-        .bind(crypto.randomUUID(), weekId, userId, title, position)),
-    ]);
-  }
-  return { today, weekId, start, end, nextWeekId, nextStart, nextEnd };
+  return ensureWeekLifecycle(userId, today);
 }
 
 async function prestigePoints(userId: string) {
@@ -78,14 +53,20 @@ async function prestigePoints(userId: string) {
 
 async function loadPlanner(userId: string, campaign: Awaited<ReturnType<typeof seedAccount>>) {
   const weekIds = [campaign.weekId, campaign.nextWeekId];
-  const [weeks, daily, weekly, completions] = await Promise.all([
+  const [weeks, daily, weekly, completions, dailyActivity, weeklyActivity] = await Promise.all([
     env.DB.prepare("SELECT id,starts_on,ends_on,status FROM weeks WHERE user_id=? AND id IN (?,?) ORDER BY starts_on").bind(userId, ...weekIds).all<{ id: string; starts_on: string; ends_on: string; status: string }>(),
     env.DB.prepare("SELECT id,week_id,title,kind,day_index,position FROM daily_quests WHERE user_id=? AND week_id IN (?,?) ORDER BY kind DESC,day_index,position").bind(userId, ...weekIds).all<{ id: string; week_id: string; title: string; kind: "required" | "bonus"; day_index: number | null; position: number }>(),
-    env.DB.prepare("SELECT id,week_id,title,position,completed_at FROM weekly_quests WHERE user_id=? AND week_id IN (?,?) ORDER BY position").bind(userId, ...weekIds).all<{ id: string; week_id: string; title: string; position: number; completed_at: string | null }>(),
+    env.DB.prepare("SELECT id,week_id,title,milestone_id,position,completed_at FROM weekly_quests WHERE user_id=? AND week_id IN (?,?) ORDER BY position").bind(userId, ...weekIds).all<{ id: string; week_id: string; title: string; milestone_id: string | null; position: number; completed_at: string | null }>(),
     env.DB.prepare("SELECT c.completed_on,q.kind,COUNT(*) count FROM daily_completions c JOIN daily_quests q ON q.id=c.quest_id WHERE c.user_id=? AND q.user_id=? AND c.completed_on>=? AND c.completed_on<=? GROUP BY c.completed_on,q.kind").bind(userId, userId, campaign.start, campaign.end).all<{ completed_on: string; kind: "required" | "bonus"; count: number }>(),
+    env.DB.prepare("SELECT q.week_id,COUNT(*) count FROM daily_completions c JOIN daily_quests q ON q.id=c.quest_id AND q.user_id=c.user_id WHERE c.user_id=? AND q.week_id IN (?,?) GROUP BY q.week_id").bind(userId, ...weekIds).all<{ week_id: string; count: number }>(),
+    env.DB.prepare("SELECT week_id,COUNT(*) count FROM weekly_quests WHERE user_id=? AND week_id IN (?,?) AND completed_at IS NOT NULL GROUP BY week_id").bind(userId, ...weekIds).all<{ week_id: string; count: number }>(),
   ]);
-  return weeks.results.map((week) => ({
-    id: week.id, startsOn: week.starts_on, endsOn: week.ends_on, status: week.status,
+  return weeks.results.map((week) => {
+    const activityCount = Number(dailyActivity.results.find((item) => item.week_id === week.id)?.count ?? 0) + Number(weeklyActivity.results.find((item) => item.week_id === week.id)?.count ?? 0);
+    const editable = week.status !== "closed" && activityCount === 0;
+    return {
+    id: week.id, startsOn: week.starts_on, endsOn: week.ends_on, status: week.status, editable,
+    lockReason: week.status === "closed" ? "This campaign is closed and preserved in History." : activityCount > 0 ? "Planning is locked while this campaign contains completed quests. Reopen them before changing the plan." : null,
     required: daily.results.filter((quest) => quest.week_id === week.id && quest.kind === "required"),
     bonus: Array.from({ length: 7 }, (_, dayIndex) => ({ dayIndex, quests: daily.results.filter((quest) => quest.week_id === week.id && quest.kind === "bonus" && quest.day_index === dayIndex) })),
     weekly: weekly.results.filter((quest) => quest.week_id === week.id).map((quest) => ({ ...quest, complete: Boolean(quest.completed_at) })),
@@ -96,7 +77,7 @@ async function loadPlanner(userId: string, campaign: Awaited<ReturnType<typeof s
       const bonusComplete = Number(completions.results.find((item) => item.completed_on === date && item.kind === "bonus")?.count ?? 0);
       return { dayIndex, date, requiredComplete, bonusAssigned, bonusComplete, strong: qualifiesForStrongDay(requiredComplete, bonusAssigned, bonusComplete), active: date === campaign.today };
     }),
-  }));
+  }});
 }
 
 async function loadHistory(userId: string, timezone: string, today: string) {
@@ -187,7 +168,7 @@ async function loadState(userId: string) {
        WHERE q.week_id=? AND q.user_id=? AND (q.kind='required' OR q.day_index=?) ORDER BY q.kind DESC,q.position`,
     ).bind(campaign.today, campaign.weekId, userId, dayIndex).all<QuestRow>(),
     env.DB.prepare(
-      `SELECT id,title,CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END complete
+      `SELECT id,title,milestone_id,CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END complete
        FROM weekly_quests WHERE week_id=? AND user_id=? ORDER BY position`,
     ).bind(campaign.weekId, userId).all<WeeklyRow>(),
     env.DB.prepare("SELECT id,title,description,target_date FROM goals WHERE user_id=? AND status='active' ORDER BY target_date").bind(userId).all(),
@@ -240,20 +221,8 @@ export async function POST(request: Request) {
       const profile = await env.DB.prepare("SELECT timezone FROM users WHERE id=?").bind(userId).first<{ timezone: string }>();
       const today = localDate(profile?.timezone ?? "America/New_York");
       const plan = validateWeekPlan(action, today);
-      const bounds = weekBounds(plan.startsOn);
       const weekId = `${userId}_${plan.startsOn}`;
-      const week = await env.DB.prepare("SELECT status FROM weeks WHERE id=? AND user_id=?").bind(weekId, userId).first<{ status: string }>();
-      if (!week || week.status === "closed") return Response.json({ error: "This week can no longer be planned" }, { status: 409 });
-      const activity = await env.DB.prepare("SELECT (SELECT COUNT(*) FROM daily_completions WHERE user_id=? AND completed_on>=? AND completed_on<=?) + (SELECT COUNT(*) FROM weekly_quests WHERE user_id=? AND week_id=? AND completed_at IS NOT NULL) count")
-        .bind(userId, bounds.start, bounds.end, userId, weekId).first<{ count: number }>();
-      if (Number(activity?.count ?? 0) > 0) return Response.json({ error: "A week with completed quests cannot be replanned" }, { status: 409 });
-      await env.DB.batch([
-        env.DB.prepare("DELETE FROM weekly_quests WHERE week_id=? AND user_id=?").bind(weekId, userId),
-        env.DB.prepare("DELETE FROM daily_quests WHERE week_id=? AND user_id=?").bind(weekId, userId),
-        ...plan.required.map((title, position) => env.DB.prepare("INSERT INTO daily_quests (id,week_id,user_id,title,kind,day_index,position) VALUES (?,?,?,?, 'required',NULL,?)").bind(crypto.randomUUID(), weekId, userId, title, position)),
-        ...plan.bonus.flatMap((day) => day.titles.map((title, position) => env.DB.prepare("INSERT INTO daily_quests (id,week_id,user_id,title,kind,day_index,position) VALUES (?,?,?,?, 'bonus',?,?)").bind(crypto.randomUUID(), weekId, userId, title, day.dayIndex, position))),
-        ...plan.weekly.map((title, position) => env.DB.prepare("INSERT INTO weekly_quests (id,week_id,user_id,title,position) VALUES (?,?,?,?,?)").bind(crypto.randomUUID(), weekId, userId, title, position)),
-      ]);
+      await saveWeekPlan(userId, weekId, plan);
     } else if (action.type === "toggle-daily") {
       const quest = await findDailyQuest(userId, action.questId);
       if (!quest || quest.status === "closed") return Response.json({ error: "Quest is unavailable" }, { status: 404 });
@@ -263,15 +232,9 @@ export async function POST(request: Request) {
       if (action.completedOn !== today || (quest.kind === "bonus" && quest.day_index !== todayIndex)) return Response.json({ error: "Daily quests can only be changed on their scheduled local day" }, { status: 409 });
       await toggleDailyQuest({ userId, questId: action.questId, completedOn: action.completedOn, now });
     } else if (action.type === "toggle-weekly") {
-      const quest = await findWeeklyQuest(userId, action.questId);
-      if (!quest || quest.status === "closed") return Response.json({ error: "Quest is unavailable" }, { status: 404 });
-      const completing = !quest.completed_at;
-      await updateWeeklyCompletion(userId, action.questId, completing ? now : null).run();
+      await toggleWeeklyQuest(userId, action.questId, now);
     } else if (action.type === "toggle-milestone") {
-      const item = await findMilestone(userId, action.milestoneId);
-      if (!item) return Response.json({ error: "Milestone not found" }, { status: 404 });
-      const completing = !item.completed_at;
-      await updateMilestoneCompletion(userId, action.milestoneId, completing ? now : null).run();
+      await toggleMilestone(userId, action.milestoneId, now);
     } else if (action.type === "save-goal") {
       const title = action.title.trim();
       const description = action.description.trim();
@@ -293,6 +256,10 @@ export async function POST(request: Request) {
         if (!ownedGoal) return Response.json({ error: "Goal not found" }, { status: 404 });
         const existing = await env.DB.prepare("SELECT id FROM milestones WHERE goal_id=? AND user_id=?").bind(goalId, userId).all<{ id: string }>();
         const retainedIds = new Set(milestoneInputs.map((milestone) => milestone.id).filter(Boolean));
+        for (const milestone of existing.results.filter((item) => !retainedIds.has(item.id))) {
+          const linkedQuest = await env.DB.prepare("SELECT id FROM weekly_quests WHERE user_id=? AND milestone_id=? LIMIT 1").bind(userId, milestone.id).first<{ id: string }>();
+          if (linkedQuest) return Response.json({ error: "Remove this milestone from its linked weekly quest before deleting it." }, { status: 409 });
+        }
         await env.DB.batch([
           env.DB.prepare("UPDATE goals SET title=?,description=?,target_date=? WHERE id=? AND user_id=?").bind(title, description, targetDate, goalId, userId),
           ...existing.results.filter((milestone) => !retainedIds.has(milestone.id)).map((milestone) => env.DB.prepare("DELETE FROM milestones WHERE id=? AND goal_id=? AND user_id=?").bind(milestone.id, goalId, userId)),
@@ -316,6 +283,6 @@ export async function POST(request: Request) {
     }
     return Response.json(await loadState(userId));
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to update campaign" }, { status: error instanceof DailyQuestError ? error.status : 500 });
+    return Response.json({ error: error instanceof Error ? error.message : "Unable to update campaign" }, { status: error instanceof DailyQuestError || error instanceof WeekPlanError ? error.status : 500 });
   }
 }

@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 type Identity = { email: string; displayName: string; fullName: string | null };
 type Section = "Today" | "Week" | "Goals" | "History" | "Prestige" | "Settings";
-type Quest = { id: string; title: string; complete: boolean; kind?: "required" | "bonus"; day_index?: number | null; position?: number };
+type Quest = { id: string; title: string; complete: boolean; kind?: "required" | "bonus"; milestone_id?: string | null; day_index?: number | null; position?: number };
 type Milestone = { id: string; title: string; complete: boolean; position: number };
 type Goal = { id: string; title: string; description: string; target_date: string | null; milestones: Milestone[] };
 type Profile = { email: string; displayName: string; timezone: string; onboardingComplete: boolean };
 type Prestige = { points: number; level: number; title: string; nextThreshold: number | null; nextTitle: string | null; progress: number; tiers: Array<{ level: number; threshold: number; title: string }> };
-type PlannerWeek = { id: string; startsOn: string; endsOn: string; status: string; required: Quest[]; bonus: Array<{ dayIndex: number; quests: Quest[] }>; weekly: Quest[]; days: Array<{ dayIndex: number; date: string; requiredComplete: number; bonusAssigned: number; bonusComplete: number; strong: boolean; active: boolean }> };
+type PlannerWeek = { id: string; startsOn: string; endsOn: string; status: string; editable: boolean; lockReason: string | null; required: Quest[]; bonus: Array<{ dayIndex: number; quests: Quest[] }>; weekly: Quest[]; days: Array<{ dayIndex: number; date: string; requiredComplete: number; bonusAssigned: number; bonusComplete: number; strong: boolean; active: boolean }> };
 type HistoryWeek = { id: string; startsOn: string; endsOn: string; days: Array<{ date: string; requiredComplete: number; bonusAssigned: number; bonusComplete: number; strong: boolean }>; strongDays: number; weeklyCompleted: number; weeklyAssigned: number; pointsEarned: number; rank: string };
 type CampaignHistory = { summary: { currentStreak: number; strongDays: number; lifetimePoints: number }; weeks: HistoryWeek[] };
+type WeekPlanPayload = { startsOn: string; required: string[]; bonus: Array<{ dayIndex: number; titles: string[] }>; weekly: Array<{ title: string; milestoneId: string | null }> };
 type CampaignState = {
   profile: Profile;
   campaign: { today: string; start: string; end: string };
@@ -116,7 +117,7 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
     const source = group === "required" ? required : group === "bonus" ? bonus : weekly;
     const quest = source.find((item) => item.id === id)!;
     setter(source.map((item) => item.id === id ? { ...item, complete: !item.complete } : item));
-    setToast(quest.complete ? `${quest.title} reopened` : group === "weekly" ? "Weekly quest complete" : "Quest complete · +3 prestige points");
+    setToast(quest.complete ? `${quest.title} reopened${group === "weekly" && quest.milestone_id ? " · linked milestone updated" : ""}` : group === "weekly" ? quest.milestone_id ? "Weekly quest and linked milestone complete" : "Weekly quest complete" : "Quest complete · +3 prestige points");
     try {
       await post(group === "weekly" ? { type: "toggle-weekly", questId: id } : { type: "toggle-daily", questId: id, completedOn: today });
     } catch (error) {
@@ -182,7 +183,7 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
 
   const content = useMemo(() => {
     if (section === "Today") return <Today required={required} bonus={bonus} weekly={weekly} progress={progress} toggleQuest={toggleQuest} today={today} week={planner[0]} displayName={profile.displayName} />;
-    if (section === "Week") return <WeekView weeks={planner} savePlan={async (plan) => { try { await post({ type: "plan-week", ...plan }); setToast("Next campaign saved"); } catch (error) { setToast(error instanceof Error ? error.message : "Unable to save week"); } }} />;
+    if (section === "Week") return <WeekView weeks={planner} goals={goals} savePlan={async (plan) => { try { await post({ type: "plan-week", ...plan }); setToast(plan.startsOn === planner[0]?.startsOn ? "Current campaign saved" : "Next campaign saved"); } catch (error) { setToast(error instanceof Error ? error.message : "Unable to save week"); } }} />;
     if (section === "Goals") return <Goals goals={goals} toggleMilestone={toggleMilestone} saveGoal={saveGoal} />;
     if (section === "History") return <History history={history} />;
     if (section === "Prestige") return <PrestigeView prestige={prestige} />;
@@ -222,7 +223,7 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
 
 function QuestRow({ quest, onToggle }: { quest: Quest; onToggle: () => void }) {
   return <button className={`quest-row ${quest.complete ? "complete" : ""}`} onClick={onToggle} aria-label={`${quest.complete ? "Reopen" : "Complete"} ${quest.title}`}>
-    <i className="check">{quest.complete ? "✓" : ""}</i><span className="quest-copy"><b>{quest.title}</b><small>{quest.kind === "bonus" ? "Bonus quest" : quest.kind === "required" ? "Required quest" : "Weekly quest"}</small></span>{quest.kind && <span className="quest-points">+3 <em>PP</em></span>}
+    <i className="check">{quest.complete ? "✓" : ""}</i><span className="quest-copy"><b>{quest.title}</b><small>{quest.kind === "bonus" ? "Bonus quest" : quest.kind === "required" ? "Required quest" : quest.milestone_id ? "Weekly quest · Linked milestone" : "Weekly quest"}</small></span>{quest.kind && <span className="quest-points">+3 <em>PP</em></span>}
   </button>;
 }
 
@@ -251,28 +252,52 @@ function Today({ required, bonus, weekly, progress, toggleQuest, today, week, di
   </>;
 }
 
-function WeekView({ weeks, savePlan }: { weeks: PlannerWeek[]; savePlan: (plan: { startsOn: string; required: string[]; bonus: Array<{ dayIndex: number; titles: string[] }>; weekly: string[] }) => Promise<void> }) {
+function WeekView({ weeks, goals, savePlan }: { weeks: PlannerWeek[]; goals: Goal[]; savePlan: (plan: WeekPlanPayload) => Promise<void> }) {
   const current = weeks[0];
   const next = weeks[1];
   return <section className="page-section"><PageHeader eyebrow="WEEKLY CALENDAR" title="Your campaign map" copy="Your quests now follow the calendar in your saved timezone." />
     {!current && <article className="panel planner-empty"><h2>Your campaign could not be loaded</h2><p>Run the latest database migrations, then refresh this page.</p><code>npm run db:migrate</code></article>}
-    {current && <><div className="week-grid">{current.days.map((day) => <article className={`panel day-card ${day.active ? "active" : ""}`} key={day.date}><header><small>{formatDay(day.date)}</small><b>{dateFromIso(day.date).getUTCDate()}</b></header>{current.required.map((quest) => <div key={quest.id}><i className={day.requiredComplete === 3 ? "done" : ""}>{day.requiredComplete === 3 ? "✓" : ""}</i><span>{quest.title}</span></div>)}{current.bonus.find((item) => item.dayIndex === day.dayIndex)?.quests.map((quest, index) => <div className="bonus-line" key={quest.id}><i className={index < day.bonusComplete ? "done" : ""}>{index < day.bonusComplete ? "✓" : "+"}</i><span>{quest.title}</span></div>)}<footer>{day.strong ? "✦ Strong Day · +10 PP" : day.date < (current.days.find((item) => item.active)?.date ?? "") ? `${day.requiredComplete}/3 required · ${day.bonusComplete}/${day.bonusAssigned} bonus` : day.active ? `${day.requiredComplete}/3 required · ${day.bonusComplete}/${day.bonusAssigned} bonus` : "Upcoming"}</footer></article>)}</div><WeekPlanForm key={`current-${current.id}`} week={current} savePlan={savePlan} /></>}
-    {next && <WeekPlanForm key={`next-${next.id}`} week={next} savePlan={savePlan} />}
+    {current && <><div className="week-grid">{current.days.map((day) => <article className={`panel day-card ${day.active ? "active" : ""}`} key={day.date}><header><small>{formatDay(day.date)}</small><b>{dateFromIso(day.date).getUTCDate()}</b></header>{current.required.map((quest) => <div key={quest.id}><i className={day.requiredComplete === 3 ? "done" : ""}>{day.requiredComplete === 3 ? "✓" : ""}</i><span>{quest.title}</span></div>)}{current.bonus.find((item) => item.dayIndex === day.dayIndex)?.quests.map((quest, index) => <div className="bonus-line" key={quest.id}><i className={index < day.bonusComplete ? "done" : ""}>{index < day.bonusComplete ? "✓" : "+"}</i><span>{quest.title}</span></div>)}<footer>{day.strong ? "✦ Strong Day · +10 PP" : day.date < (current.days.find((item) => item.active)?.date ?? "") ? `${day.requiredComplete}/3 required · ${day.bonusComplete}/${day.bonusAssigned} bonus` : day.active ? `${day.requiredComplete}/3 required · ${day.bonusComplete}/${day.bonusAssigned} bonus` : "Upcoming"}</footer></article>)}</div><WeekPlanForm key={`current-${current.id}`} week={current} goals={goals} savePlan={savePlan} /></>}
+    {next && <WeekPlanForm key={`next-${next.id}`} week={next} goals={goals} savePlan={savePlan} />}
   </section>;
 }
 
-function WeekPlanForm({ week, savePlan }: { week: PlannerWeek; savePlan: (plan: { startsOn: string; required: string[]; bonus: Array<{ dayIndex: number; titles: string[] }>; weekly: string[] }) => Promise<void> }) {
+function MilestoneSelect({ goals, value, disabled, usedMilestones, label, onChange }: { goals: Goal[]; value: string | null; disabled: boolean; usedMilestones: Set<string>; label: string; onChange: (value: string | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const selected = goals.flatMap((goal) => goal.milestones).find((milestone) => milestone.id === value);
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsideClick = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => { document.removeEventListener("mousedown", closeOnOutsideClick); document.removeEventListener("keydown", closeOnEscape); };
+  }, [open]);
+  return <div className={`milestone-select ${open ? "open" : ""}`} ref={root}>
+    <button type="button" className="milestone-select-trigger" disabled={disabled} aria-label={label} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}><span>{selected?.title ?? "No linked milestone"}</span><i>{open ? "▴" : "▾"}</i></button>
+    {open && <div className="milestone-select-menu" role="listbox" aria-label={label}>
+      <button type="button" role="option" aria-selected={!value} className={!value ? "selected" : ""} onClick={() => { onChange(null); setOpen(false); }}><span>No linked milestone</span><small>Track this quest independently</small></button>
+      {goals.map((goal) => <section key={goal.id}><header>{goal.title}</header>{goal.milestones.map((milestone) => { const unavailable = usedMilestones.has(milestone.id); return <button type="button" role="option" aria-selected={value === milestone.id} className={value === milestone.id ? "selected" : ""} disabled={unavailable} onClick={() => { onChange(milestone.id); setOpen(false); }} key={milestone.id}><span>{milestone.title}</span><small>{unavailable ? "Linked to another weekly quest" : milestone.complete ? "Milestone already complete" : "Complete with this weekly quest"}</small></button>; })}</section>)}
+      {goals.length === 0 && <p>Create a long-term goal first to link a milestone.</p>}
+    </div>}
+  </div>;
+}
+
+function WeekPlanForm({ week, goals, savePlan }: { week: PlannerWeek; goals: Goal[]; savePlan: (plan: WeekPlanPayload) => Promise<void> }) {
   const [required, setRequired] = useState(() => Array.from({ length: 3 }, (_, index) => week.required[index]?.title ?? ""));
-  const [weekly, setWeekly] = useState(() => Array.from({ length: 3 }, (_, index) => week.weekly[index]?.title ?? ""));
+  const [weekly, setWeekly] = useState(() => Array.from({ length: 3 }, (_, index) => ({ title: week.weekly[index]?.title ?? "", milestoneId: week.weekly[index]?.milestone_id ?? null })));
   const [bonus, setBonus] = useState(() => Array.from({ length: 7 }, (_, dayIndex) => Array.from({ length: 2 }, (_, index) => week.bonus.find((day) => day.dayIndex === dayIndex)?.quests[index]?.title ?? "")));
   const [saving, setSaving] = useState(false);
   const update = (values: string[], index: number, value: string) => values.map((item, itemIndex) => itemIndex === index ? value : item);
-  async function submit(event: FormEvent) { event.preventDefault(); setSaving(true); await savePlan({ startsOn: week.startsOn, required, weekly: weekly.filter((title) => title.trim()), bonus: bonus.map((titles, dayIndex) => ({ dayIndex, titles: titles.filter((title) => title.trim()) })) }); setSaving(false); }
+  async function submit(event: FormEvent) { event.preventDefault(); if (!week.editable) return; setSaving(true); await savePlan({ startsOn: week.startsOn, required, weekly: weekly.filter((quest) => quest.title.trim()).map((quest) => ({ ...quest, title: quest.title.trim() })), bonus: bonus.map((titles, dayIndex) => ({ dayIndex, titles: titles.filter((title) => title.trim()) })) }); setSaving(false); }
   const isCurrent = week.status === "active";
-  return <form className="panel week-planner" onSubmit={submit}><header><div><p className="eyebrow">{isCurrent ? "EDIT THIS CAMPAIGN" : "PLAN AHEAD"}</p><h2>{isCurrent ? "Current" : "Next"} campaign · {formatShortDate(week.startsOn)} – {formatShortDate(week.endsOn)}</h2><p>Set three quests that repeat daily, optional day-specific bonuses, and one to three weekly objectives.</p></div><button className="button button-gold" disabled={saving}>{saving ? "Saving…" : isCurrent ? "Save this week" : "Save next week"}</button></header>
-    <section><h3>Required daily quests <span>Exactly 3</span></h3><div className="planner-required">{required.map((title, index) => <label key={index}><small>QUEST {index + 1}</small><input required maxLength={120} value={title} onChange={(event) => setRequired(update(required, index, event.target.value))} placeholder={index === 0 ? "Exercise for 30 minutes" : index === 1 ? "Plan tomorrow" : "Read for 20 minutes"} /></label>)}</div></section>
-    <section><h3>Daily bonus quests <span>Up to 2 each day</span></h3><div className="planner-bonus">{week.days.map((day) => <div key={day.date}><b>{formatDay(day.date)} <small>{formatShortDate(day.date)}</small></b>{bonus[day.dayIndex].map((title, index) => <input key={index} maxLength={120} value={title} onChange={(event) => setBonus(bonus.map((titles, dayIndex) => dayIndex === day.dayIndex ? update(titles, index, event.target.value) : titles))} placeholder={`Bonus slot ${index + 1}`} />)}</div>)}</div></section>
-    <section><h3>Weekly quests <span>Choose 1–3</span></h3><div className="planner-required">{weekly.map((title, index) => <label key={index}><small>{index === 0 ? "REQUIRED" : `OPTIONAL ${index}`}</small><input required={index === 0} maxLength={120} value={title} onChange={(event) => setWeekly(update(weekly, index, event.target.value))} placeholder={index === 0 ? "Complete the week’s main objective" : "Additional weekly quest"} /></label>)}</div></section>
+  const guidance = week.lockReason ?? (isCurrent ? "You can edit this campaign until you complete its first daily or weekly quest. After progress begins, reopen every completion before changing the plan." : "Plan freely now. These quests become your active campaign on Sunday and lock after you begin completing them.");
+  return <form className={`panel week-planner ${week.editable ? "" : "locked"}`} onSubmit={submit}><header><div><p className="eyebrow">{week.editable ? isCurrent ? "EDIT THIS CAMPAIGN" : "PLAN AHEAD" : "CAMPAIGN LOCKED"}</p><h2>{isCurrent ? "Current" : "Next"} campaign · {formatShortDate(week.startsOn)} – {formatShortDate(week.endsOn)}</h2><p>Set three quests that repeat daily, optional day-specific bonuses, and one to three weekly objectives.</p></div><button className="button button-gold" disabled={saving || !week.editable} title={week.lockReason ?? undefined}>{saving ? "Saving…" : week.editable ? isCurrent ? "Save this week" : "Save next week" : "Planning locked"}</button></header>
+    <div className={`planning-safeguard ${week.editable ? "editable" : "locked"}`} role="status"><span>{week.editable ? "◇" : "◆"}</span><div><b>{week.editable ? "Planning is open" : "Your progress is protected"}</b><p>{guidance}</p></div></div>
+    <section><h3>Required daily quests <span>Exactly 3</span></h3><div className="planner-required">{required.map((title, index) => <label key={index}><small>QUEST {index + 1}</small><input disabled={!week.editable} required maxLength={120} value={title} onChange={(event) => setRequired(update(required, index, event.target.value))} placeholder={index === 0 ? "Exercise for 30 minutes" : index === 1 ? "Plan tomorrow" : "Read for 20 minutes"} /></label>)}</div></section>
+    <section><h3>Daily bonus quests <span>Up to 2 each day</span></h3><div className="planner-bonus">{week.days.map((day) => <div key={day.date}><b>{formatDay(day.date)} <small>{formatShortDate(day.date)}</small></b>{bonus[day.dayIndex].map((title, index) => <input disabled={!week.editable} key={index} maxLength={120} value={title} onChange={(event) => setBonus(bonus.map((titles, dayIndex) => dayIndex === day.dayIndex ? update(titles, index, event.target.value) : titles))} placeholder={`Bonus slot ${index + 1}`} />)}</div>)}</div></section>
+    <section><h3>Weekly quests <span>Choose 1–3 · Link milestones optionally</span></h3><div className="planner-required">{weekly.map((quest, index) => <div className="weekly-quest-field" key={index}><small>{index === 0 ? "REQUIRED" : `OPTIONAL ${index}`}</small><input aria-label={`Weekly quest ${index + 1}`} disabled={!week.editable} required={index === 0} maxLength={120} value={quest.title} onChange={(event) => setWeekly(weekly.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder={index === 0 ? "Complete the week’s main objective" : "Additional weekly quest"} /><MilestoneSelect goals={goals} value={quest.milestoneId} disabled={!week.editable || !quest.title.trim()} usedMilestones={new Set(weekly.filter((_, itemIndex) => itemIndex !== index).map((item) => item.milestoneId).filter((id): id is string => Boolean(id)))} label={`Linked milestone for weekly quest ${index + 1}`} onChange={(milestoneId) => setWeekly(weekly.map((item, itemIndex) => itemIndex === index ? { ...item, milestoneId } : item))} /></div>)}</div></section>
   </form>;
 }
 

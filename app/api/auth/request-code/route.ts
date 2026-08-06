@@ -1,8 +1,8 @@
 import { digest, ensureAuthTables, normalizeEmail } from "../../../auth";
 import { db } from "../../../../db";
+import { EmailDeliveryError, mayExposeDevelopmentCode, sendVerificationEmail } from "../../../auth-email";
 
 const env = { DB: db };
-const runtimeValue = (name: string) => process.env[name];
 
 export async function POST(request: Request) {
   await ensureAuthTables();
@@ -19,11 +19,15 @@ export async function POST(request: Request) {
   await env.DB.prepare("INSERT INTO auth_codes (id,email,code_hash,created_at,expires_at,attempts) VALUES (?,?,?,?,?,0)")
     .bind(id, email, await digest(`${id}:${code}`), createdAt.toISOString(), expiresAt.toISOString()).run();
 
-  const hostname = new URL(request.url).hostname;
-  if (hostname === "localhost" || hostname === "127.0.0.1") return Response.json({ ok: true, devCode: code });
-  const apiKey = runtimeValue("RESEND_API_KEY");
-  const from = runtimeValue("AUTH_FROM_EMAIL");
-  if (typeof apiKey !== "string" || typeof from !== "string") return Response.json({ error: "Email delivery is not configured yet." }, { status: 503 });
-  const sent = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json", "idempotency-key": id, "user-agent": "STRONGLY/1.0" }, body: JSON.stringify({ from, to: [email], subject: `${code} is your STRONGLY sign-in code`, text: `Your STRONGLY sign-in code is ${code}. It expires in 10 minutes.` }) });
-  return sent.ok ? Response.json({ ok: true }) : Response.json({ error: "We could not send the code. Try again shortly." }, { status: 502 });
+  if (mayExposeDevelopmentCode(request.url)) return Response.json({ ok: true, devCode: code });
+  try {
+    await sendVerificationEmail({ to: email, code, requestId: id });
+    return Response.json({ ok: true });
+  } catch (error) {
+    await env.DB.prepare("DELETE FROM auth_codes WHERE id=? AND email=?").bind(id, email).run();
+    return Response.json(
+      { error: error instanceof Error ? error.message : "We could not send the code. Try again shortly." },
+      { status: error instanceof EmailDeliveryError ? error.status : 502 },
+    );
+  }
 }

@@ -24,6 +24,7 @@ async function databaseFixture() {
     readFile(new URL("../drizzle/0000_azure_postgres.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0001_prestige_system.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0002_new_user_walkthrough.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0003_weekly_milestone_provenance.sql", import.meta.url), "utf8"),
   ]);
   for (const migration of migrations) await pool.query(migration);
   await db.batch([

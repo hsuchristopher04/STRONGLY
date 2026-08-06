@@ -32,14 +32,17 @@ test("ships the STRONGLY product experience", async () => {
 });
 
 test("ships passwordless email authentication", async () => {
-  const [auth, requestCode, verifyCode] = await Promise.all([
+  const [auth, authEmail, requestCode, verifyCode] = await Promise.all([
     readFile(new URL("../app/auth.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/auth-email.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/auth/request-code/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/auth/verify-code/route.ts", import.meta.url), "utf8"),
   ]);
   assert.match(auth, /HttpOnly|SESSION_COOKIE/);
   assert.match(requestCode, /10 \* 60_000/);
-  assert.match(requestCode, /RESEND_API_KEY/);
+  assert.match(authEmail, /RESEND_API_KEY/);
+  assert.match(authEmail, /NODE_ENV === "production"/);
+  assert.match(requestCode, /DELETE FROM auth_codes/);
   assert.match(verifyCode, /attempts >= 5/);
 });
 

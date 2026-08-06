@@ -3,7 +3,7 @@ import { db } from "../../../db";
 export type OwnedDailyQuest = { status: string; kind: "required" | "bonus"; day_index: number | null };
 export type OwnedCompletion = { id: string };
 export type OwnedWeeklyQuest = { completed_at: string | null; status: string };
-export type OwnedMilestone = { completed_at: string | null };
+export type OwnedMilestone = { completed_at: string | null; completed_by_weekly_quest_id: string | null };
 
 export function findDailyQuest(userId: string, questId: string) {
   return db.prepare("SELECT q.kind,q.day_index,w.status FROM daily_quests q JOIN weeks w ON w.id=q.week_id WHERE q.id=? AND q.user_id=? AND w.user_id=?")
@@ -21,7 +21,7 @@ export function findWeeklyQuest(userId: string, questId: string) {
 }
 
 export function findMilestone(userId: string, milestoneId: string) {
-  return db.prepare("SELECT completed_at FROM milestones WHERE id=? AND user_id=?")
+  return db.prepare("SELECT completed_at,completed_by_weekly_quest_id FROM milestones WHERE id=? AND user_id=?")
     .bind(milestoneId, userId).first<OwnedMilestone>();
 }
 
@@ -34,7 +34,7 @@ export function updateWeeklyCompletion(userId: string, questId: string, complete
 }
 
 export function updateMilestoneCompletion(userId: string, milestoneId: string, completedAt: string | null) {
-  return db.prepare("UPDATE milestones SET completed_at=? WHERE id=? AND user_id=?").bind(completedAt, milestoneId, userId);
+  return db.prepare("UPDATE milestones SET completed_at=?,completed_by_weekly_quest_id=NULL WHERE id=? AND user_id=?").bind(completedAt, milestoneId, userId);
 }
 
 export function updateProfile(userId: string, displayName: string, timezone: string) {

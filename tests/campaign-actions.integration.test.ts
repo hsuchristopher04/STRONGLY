@@ -14,7 +14,7 @@ async function fixture() {
   const adapter = memory.adapters.createPg();
   const pool = new adapter.Pool() as unknown as Pool;
   setDatabasePool(pool);
-  for (const migrationName of ["0000_azure_postgres.sql", "0001_prestige_system.sql", "0002_new_user_walkthrough.sql"]) {
+  for (const migrationName of ["0000_azure_postgres.sql", "0001_prestige_system.sql", "0002_new_user_walkthrough.sql", "0003_weekly_milestone_provenance.sql"]) {
     await pool.query(await readFile(new URL(`../drizzle/${migrationName}`, import.meta.url), "utf8"));
   }
   await db.batch([

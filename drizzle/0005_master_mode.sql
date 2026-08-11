@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN IF NOT EXISTS master_mode integer NOT NULL DEFAULT 0;

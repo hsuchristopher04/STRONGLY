@@ -6,6 +6,7 @@ import { prestigeStatus, qualifiesForStrongDay } from "./prestige";
 import { DailyQuestError, toggleDailyQuest } from "./daily-quest-service";
 import { ensureWeekLifecycle } from "./week-lifecycle";
 import { saveWeekPlan, toggleMilestone, toggleWeeklyQuest, WeekPlanError } from "./week-plan-service";
+import { canEditDailyQuest } from "./master-mode";
 
 const env = { DB: db };
 
@@ -14,6 +15,10 @@ type Action =
   | { type: "toggle-weekly"; questId: string }
   | { type: "toggle-milestone"; milestoneId: string }
   | { type: "save-goal"; goalId?: string; title: string; description: string; targetDate: string | null; milestones: Array<{ id?: string; title: string }> }
+  | { type: "goal-status"; goalId: string; status: "active" | "completed" | "archived" }
+  | { type: "feature-goal"; goalId: string }
+  | { type: "delete-goal"; goalId: string }
+  | { type: "master-mode"; enabled: boolean }
   | { type: "complete-onboarding" }
   | { type: "profile"; displayName: string; timezone: string }
   | ({ type: "plan-week" } & WeekPlanInput);
@@ -30,8 +35,10 @@ function idFor(email: string) {
   return `user_${email.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
 }
 
-async function ensureUser(email: string, displayName: string) {
-  const id = idFor(email);
+async function ensureUser(email: string, displayName: string, authenticatedId?: string) {
+  const existing = await env.DB.prepare("SELECT id FROM users WHERE email=?").bind(email).first<{ id: string }>();
+  if (existing) return existing.id;
+  const id = authenticatedId ?? idFor(email);
   await env.DB.prepare(
     `INSERT INTO users (id,email,display_name,timezone,created_at)
      VALUES (?,?,?,'America/New_York',?)
@@ -53,11 +60,12 @@ async function prestigePoints(userId: string) {
 
 async function loadPlanner(userId: string, campaign: Awaited<ReturnType<typeof seedAccount>>) {
   const weekIds = [campaign.weekId, campaign.nextWeekId];
-  const [weeks, daily, weekly, completions, dailyActivity, weeklyActivity] = await Promise.all([
+  const [weeks, daily, weekly, completions, completionDetails, dailyActivity, weeklyActivity] = await Promise.all([
     env.DB.prepare("SELECT id,starts_on,ends_on,status FROM weeks WHERE user_id=? AND id IN (?,?) ORDER BY starts_on").bind(userId, ...weekIds).all<{ id: string; starts_on: string; ends_on: string; status: string }>(),
     env.DB.prepare("SELECT id,week_id,title,kind,day_index,position FROM daily_quests WHERE user_id=? AND week_id IN (?,?) ORDER BY kind DESC,day_index,position").bind(userId, ...weekIds).all<{ id: string; week_id: string; title: string; kind: "required" | "bonus"; day_index: number | null; position: number }>(),
     env.DB.prepare("SELECT id,week_id,title,milestone_id,position,completed_at FROM weekly_quests WHERE user_id=? AND week_id IN (?,?) ORDER BY position").bind(userId, ...weekIds).all<{ id: string; week_id: string; title: string; milestone_id: string | null; position: number; completed_at: string | null }>(),
     env.DB.prepare("SELECT c.completed_on,q.kind,COUNT(*) count FROM daily_completions c JOIN daily_quests q ON q.id=c.quest_id WHERE c.user_id=? AND q.user_id=? AND c.completed_on>=? AND c.completed_on<=? GROUP BY c.completed_on,q.kind").bind(userId, userId, campaign.start, campaign.end).all<{ completed_on: string; kind: "required" | "bonus"; count: number }>(),
+    env.DB.prepare("SELECT c.completed_on,c.quest_id FROM daily_completions c JOIN daily_quests q ON q.id=c.quest_id AND q.user_id=c.user_id WHERE c.user_id=? AND q.week_id IN (?,?)").bind(userId, ...weekIds).all<{ completed_on: string; quest_id: string }>(),
     env.DB.prepare("SELECT q.week_id,COUNT(*) count FROM daily_completions c JOIN daily_quests q ON q.id=c.quest_id AND q.user_id=c.user_id WHERE c.user_id=? AND q.week_id IN (?,?) GROUP BY q.week_id").bind(userId, ...weekIds).all<{ week_id: string; count: number }>(),
     env.DB.prepare("SELECT week_id,COUNT(*) count FROM weekly_quests WHERE user_id=? AND week_id IN (?,?) AND completed_at IS NOT NULL GROUP BY week_id").bind(userId, ...weekIds).all<{ week_id: string; count: number }>(),
   ]);
@@ -75,7 +83,7 @@ async function loadPlanner(userId: string, campaign: Awaited<ReturnType<typeof s
       const requiredComplete = Math.min(Number(completions.results.find((item) => item.completed_on === date && item.kind === "required")?.count ?? 0), 3);
       const bonusAssigned = daily.results.filter((quest) => quest.week_id === week.id && quest.kind === "bonus" && quest.day_index === dayIndex).length;
       const bonusComplete = Number(completions.results.find((item) => item.completed_on === date && item.kind === "bonus")?.count ?? 0);
-      return { dayIndex, date, requiredComplete, bonusAssigned, bonusComplete, strong: qualifiesForStrongDay(requiredComplete, bonusAssigned, bonusComplete), active: date === campaign.today };
+      return { dayIndex, date, requiredComplete, bonusAssigned, bonusComplete, completedQuestIds: completionDetails.results.filter((item) => item.completed_on === date).map((item) => item.quest_id), strong: qualifiesForStrongDay(requiredComplete, bonusAssigned, bonusComplete), active: date === campaign.today };
     }),
   }});
 }
@@ -156,8 +164,8 @@ async function loadHistory(userId: string, timezone: string, today: string) {
 }
 
 async function loadState(userId: string) {
-  const profile = await env.DB.prepare("SELECT email,display_name,timezone,onboarding_completed FROM users WHERE id=?")
-    .bind(userId).first<{ email: string; display_name: string; timezone: string; onboarding_completed: number }>();
+  const profile = await env.DB.prepare("SELECT email,display_name,timezone,onboarding_completed,master_mode FROM users WHERE id=?")
+    .bind(userId).first<{ email: string; display_name: string; timezone: string; onboarding_completed: number; master_mode: number }>();
   if (!profile) throw new Error("Profile unavailable");
   const campaign = await seedAccount(userId, profile.timezone);
   const dayIndex = new Date(`${campaign.today}T12:00:00Z`).getUTCDay();
@@ -171,7 +179,7 @@ async function loadState(userId: string) {
       `SELECT id,title,milestone_id,CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END complete
        FROM weekly_quests WHERE week_id=? AND user_id=? ORDER BY position`,
     ).bind(campaign.weekId, userId).all<WeeklyRow>(),
-    env.DB.prepare("SELECT id,title,description,target_date FROM goals WHERE user_id=? AND status='active' ORDER BY target_date").bind(userId).all(),
+    env.DB.prepare("SELECT id,title,description,target_date,status,featured,completed_at,archived_at FROM goals WHERE user_id=? ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END,featured DESC,target_date,id").bind(userId).all(),
     env.DB.prepare(
       `SELECT id,goal_id,title,position,CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END complete
        FROM milestones WHERE user_id=? ORDER BY goal_id,position`,
@@ -182,7 +190,7 @@ async function loadState(userId: string) {
   ]);
   return {
     profile: {
-      email: profile.email, displayName: profile.display_name, timezone: profile.timezone, onboardingComplete: Boolean(profile.onboarding_completed),
+      email: profile.email, displayName: profile.display_name, timezone: profile.timezone, onboardingComplete: Boolean(profile.onboarding_completed), masterMode: Boolean(profile.master_mode),
     },
     campaign,
     daily: daily.results.map((q) => ({ ...q, complete: Boolean(q.complete) })),
@@ -202,7 +210,7 @@ export async function GET() {
   try {
     const auth = await identity();
     if (!auth) return Response.json({ error: "Authentication required" }, { status: 401 });
-    const id = await ensureUser(auth.email, auth.displayName);
+    const id = await ensureUser(auth.email, auth.displayName, auth.id);
     return Response.json(await loadState(id));
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Unable to load campaign" }, { status: 500 });
@@ -213,7 +221,7 @@ export async function POST(request: Request) {
   try {
     const auth = await identity();
     if (!auth) return Response.json({ error: "Authentication required" }, { status: 401 });
-    const userId = await ensureUser(auth.email, auth.displayName);
+    const userId = await ensureUser(auth.email, auth.displayName, auth.id);
     const action = await request.json() as Action;
     const now = new Date().toISOString();
 
@@ -225,11 +233,10 @@ export async function POST(request: Request) {
       await saveWeekPlan(userId, weekId, plan);
     } else if (action.type === "toggle-daily") {
       const quest = await findDailyQuest(userId, action.questId);
-      if (!quest || quest.status === "closed") return Response.json({ error: "Quest is unavailable" }, { status: 404 });
-      const timezone = await env.DB.prepare("SELECT timezone FROM users WHERE id=?").bind(userId).first<{ timezone: string }>();
-      const today = localDate(timezone?.timezone ?? "America/New_York");
-      const todayIndex = new Date(`${today}T12:00:00Z`).getUTCDay();
-      if (action.completedOn !== today || (quest.kind === "bonus" && quest.day_index !== todayIndex)) return Response.json({ error: "Daily quests can only be changed on their scheduled local day" }, { status: 409 });
+      if (!quest) return Response.json({ error: "Quest is unavailable" }, { status: 404 });
+      const profile = await env.DB.prepare("SELECT timezone,master_mode FROM users WHERE id=?").bind(userId).first<{ timezone: string; master_mode: number }>();
+      const today = localDate(profile?.timezone ?? "America/New_York");
+      if (!canEditDailyQuest({ completedOn: action.completedOn, today, masterMode: Boolean(profile?.master_mode), weekStatus: quest.status, startsOn: quest.starts_on, endsOn: quest.ends_on, kind: quest.kind, dayIndex: quest.day_index })) return Response.json({ error: "Enable Master Mode to correct an earlier day in the current campaign" }, { status: 409 });
       await toggleDailyQuest({ userId, questId: action.questId, completedOn: action.completedOn, now });
     } else if (action.type === "toggle-weekly") {
       await toggleWeeklyQuest(userId, action.questId, now);
@@ -268,13 +275,41 @@ export async function POST(request: Request) {
             : env.DB.prepare("INSERT INTO milestones (id,goal_id,user_id,title,position) VALUES (?,?,?,?,?)").bind(crypto.randomUUID(), goalId, userId, milestone.title, position)),
         ]);
       } else {
+        const featured = await env.DB.prepare("SELECT id FROM goals WHERE user_id=? AND featured=1").bind(userId).first();
         await env.DB.batch([
-          env.DB.prepare("INSERT INTO goals (id,user_id,title,description,target_date,status) VALUES (?,?,?,?,?,'active')").bind(goalId, userId, title, description, targetDate),
+          env.DB.prepare("INSERT INTO goals (id,user_id,title,description,target_date,status,featured) VALUES (?,?,?,?,?,'active',?)").bind(goalId, userId, title, description, targetDate, featured ? 0 : 1),
           ...milestoneInputs.map((milestone, position) => env.DB.prepare("INSERT INTO milestones (id,goal_id,user_id,title,position) VALUES (?,?,?,?,?)").bind(crypto.randomUUID(), goalId, userId, milestone.title, position)),
         ]);
       }
+    } else if (action.type === "feature-goal") {
+      const goal = await env.DB.prepare("SELECT id FROM goals WHERE id=? AND user_id=? AND status='active'").bind(action.goalId, userId).first();
+      if (!goal) return Response.json({ error: "Only an active goal can appear on Today" }, { status: 404 });
+      await env.DB.batch([
+        env.DB.prepare("UPDATE goals SET featured=0 WHERE user_id=?").bind(userId),
+        env.DB.prepare("UPDATE goals SET featured=1 WHERE id=? AND user_id=?").bind(action.goalId, userId),
+      ]);
+    } else if (action.type === "goal-status") {
+      const goal = await env.DB.prepare("SELECT id,featured FROM goals WHERE id=? AND user_id=?").bind(action.goalId, userId).first<{ id: string; featured: number }>();
+      if (!goal) return Response.json({ error: "Goal not found" }, { status: 404 });
+      await env.DB.transaction(async (transaction) => {
+        await transaction.prepare("UPDATE goals SET status=?,featured=0,completed_at=?,archived_at=? WHERE id=? AND user_id=?")
+          .bind(action.status, action.status === "completed" ? now : null, action.status === "archived" ? now : null, action.goalId, userId).run();
+        if (action.status === "completed") await transaction.prepare("UPDATE milestones SET completed_at=COALESCE(completed_at,?),completed_by_weekly_quest_id=NULL WHERE goal_id=? AND user_id=?").bind(now, action.goalId, userId).run();
+        if (action.status === "active" && goal.featured) await transaction.prepare("UPDATE goals SET featured=1 WHERE id=? AND user_id=?").bind(action.goalId, userId).run();
+      });
+    } else if (action.type === "delete-goal") {
+      const goal = await env.DB.prepare("SELECT id FROM goals WHERE id=? AND user_id=?").bind(action.goalId, userId).first();
+      if (!goal) return Response.json({ error: "Goal not found" }, { status: 404 });
+      const linked = await env.DB.prepare("SELECT q.id FROM weekly_quests q JOIN milestones m ON m.id=q.milestone_id AND m.user_id=q.user_id WHERE m.goal_id=? AND q.user_id=? LIMIT 1").bind(action.goalId, userId).first();
+      if (linked) return Response.json({ error: "Archive this goal instead, or unlink its milestones from weekly quests before deleting it." }, { status: 409 });
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM milestones WHERE goal_id=? AND user_id=?").bind(action.goalId, userId),
+        env.DB.prepare("DELETE FROM goals WHERE id=? AND user_id=?").bind(action.goalId, userId),
+      ]);
     } else if (action.type === "complete-onboarding") {
       await env.DB.prepare("UPDATE users SET onboarding_completed=1 WHERE id=?").bind(userId).run();
+    } else if (action.type === "master-mode") {
+      await env.DB.prepare("UPDATE users SET master_mode=? WHERE id=?").bind(action.enabled ? 1 : 0, userId).run();
     } else if (action.type === "profile") {
       if (!action.displayName.trim() || !action.timezone.includes("/")) return Response.json({ error: "Invalid profile" }, { status: 400 });
       await updateProfile(userId, action.displayName.trim(), action.timezone).run();

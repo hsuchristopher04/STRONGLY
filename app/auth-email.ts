@@ -34,6 +34,7 @@ export async function sendVerificationEmail(input: {
   to: string;
   code: string;
   requestId: string;
+  purpose?: "sign-in" | "email-change";
   environment?: RuntimeEnvironment;
   fetcher?: Fetcher;
 }) {
@@ -53,9 +54,9 @@ export async function sendVerificationEmail(input: {
         from: configuration.from,
         to: [input.to],
         reply_to: configuration.replyTo,
-        subject: `${input.code} is your STRONGLY sign-in code`,
-        text: `Your STRONGLY sign-in code is ${input.code}. It expires in 10 minutes. If you did not request this code, you can ignore this email.`,
-        html: `<!doctype html><html><body style="margin:0;background:#08100c;color:#f4efe3;font-family:Arial,sans-serif"><div style="max-width:560px;margin:0 auto;padding:48px 24px"><p style="color:#d9b44a;letter-spacing:3px;font-weight:700">STRONGLY.</p><div style="border:1px solid #425044;background:#111a15;padding:32px"><p style="margin-top:0;color:#aeb8b0">Your one-time sign-in code is</p><p style="margin:20px 0;font-size:38px;font-weight:800;letter-spacing:10px;color:#f0c94f">${input.code}</p><p style="color:#aeb8b0;line-height:1.6">This code expires in 10 minutes. If you did not request it, you can safely ignore this email.</p></div></div></body></html>`,
+        subject: `${input.code} is your STRONGLY ${input.purpose === "email-change" ? "email change" : "sign-in"} code`,
+        text: `Your STRONGLY ${input.purpose === "email-change" ? "email change" : "sign-in"} code is ${input.code}. It expires in 10 minutes. If you did not request this code, you can ignore this email.`,
+        html: `<!doctype html><html><body style="margin:0;background:#08100c;color:#f4efe3;font-family:Arial,sans-serif"><div style="max-width:560px;margin:0 auto;padding:48px 24px"><p style="color:#d9b44a;letter-spacing:3px;font-weight:700">STRONGLY.</p><div style="border:1px solid #425044;background:#111a15;padding:32px"><p style="margin-top:0;color:#aeb8b0">Your one-time ${input.purpose === "email-change" ? "email change" : "sign-in"} code is</p><p style="margin:20px 0;font-size:38px;font-weight:800;letter-spacing:10px;color:#f0c94f">${input.code}</p><p style="color:#aeb8b0;line-height:1.6">This code expires in 10 minutes. If you did not request it, you can safely ignore this email.</p></div></div></body></html>`,
       }),
       signal: AbortSignal.timeout(10_000),
     });

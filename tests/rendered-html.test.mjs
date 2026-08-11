@@ -57,3 +57,73 @@ test("encodes the prestige progression", async () => {
   assert.match(prestigeSource, /10_000/);
   assert.doesNotMatch(appSource, /coins|Shop|purchase/i);
 });
+
+test("renders the authenticated user's long-term goal on Today", async () => {
+  const appSource = await readFile(new URL("../app/strongly-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /goals=\{goals\}/);
+  assert.match(appSource, /activeGoal\.title/);
+  assert.match(appSource, /completedMilestones/);
+  assert.match(appSource, /Create a goal/);
+  assert.doesNotMatch(appSource, />Run my first half marathon</);
+});
+
+test("links the Today campaign summary to the Week screen", async () => {
+  const appSource = await readFile(new URL("../app/strongly-app.tsx", import.meta.url), "utf8");
+  assert.match(appSource, /onViewWeek=\{\(\) => setSection\("Week"\)\}/);
+  assert.match(appSource, /onClick=\{onViewWeek\}>View full week/);
+});
+
+test("ships complete goal lifecycle controls", async () => {
+  const [appSource, routeSource, migration] = await Promise.all([
+    readFile(new URL("../app/strongly-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/campaign/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0004_goal_lifecycle.sql", import.meta.url), "utf8"),
+  ]);
+  for (const control of ["Show on Today", "Complete goal", "Archive", "Restore", "Delete", "Move milestone"]) assert.match(appSource, new RegExp(control, "i"));
+  for (const action of ["goal-status", "feature-goal", "delete-goal"]) assert.match(routeSource, new RegExp(action));
+  assert.match(routeSource, /WHERE id=\? AND user_id=\?/);
+  assert.match(migration, /goals_one_featured_per_user/);
+});
+
+test("ships persistent honor-system Master Mode", async () => {
+  const [appSource, routeSource, migration] = await Promise.all([
+    readFile(new URL("../app/strongly-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/campaign/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0005_master_mode.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /Master Mode is intended for correcting honest mistakes/);
+  assert.match(appSource, /Master Mode enabled/);
+  assert.match(appSource, /correctPastQuest/);
+  assert.match(routeSource, /master_mode/);
+  assert.match(migration, /master_mode integer NOT NULL DEFAULT 0/);
+});
+
+test("moves account controls into a verified profile panel", async () => {
+  const [appSource, requestChange, verifyChange, migration] = await Promise.all([
+    readFile(new URL("../app/strongly-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/account/request-email-change/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/account/verify-email-change/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0006_verified_email_change.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /aria-label="Open profile"/);
+  assert.match(appSource, /Save username/);
+  assert.match(appSource, /Verify new email/);
+  assert.match(appSource, /Saturday at 11:59 PM/);
+  assert.doesNotMatch(appSource, /Reduced motion|Week starts Sunday/);
+  assert.match(requestChange, /getAuthUser/);
+  assert.match(requestChange, /purpose: "email-change"/);
+  assert.match(verifyChange, /UPDATE users SET email=\?/);
+  assert.match(verifyChange, /user_id=\?/);
+  assert.match(migration, /email_change_codes/);
+});
+
+test("renders the Today prestige seal as live tier progress", async () => {
+  const [appSource, css] = await Promise.all([
+    readFile(new URL("../app/strongly-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /function PrestigeSeal/);
+  assert.match(appSource, /strokeDasharray=\{`\$\{percentage\} 100`\}/);
+  assert.match(appSource, /onViewPrestige/);
+  assert.match(css, /\.prestige-meter/);
+});

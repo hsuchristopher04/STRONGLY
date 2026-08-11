@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "npm run build && npm run test:unit && npm run test:isolation && npm run test:weekly && npm run test:prestige && npm run test:campaign && npm run test:lifecycle && npm run test:planning-safeguards && npm run test:weekly-milestone && npm run test:auth-email",
+    "test": "npm run build && npm run test:unit && npm run test:isolation && npm run test:weekly && npm run test:prestige && npm run test:campaign && npm run test:lifecycle && npm run test:planning-safeguards && npm run test:weekly-milestone && npm run test:master-mode && npm run test:auth-email",
     "test:unit": "node --test tests/rendered-html.test.mjs",
     "test:isolation": "tsx --test tests/cross-user-isolation.test.ts",
     "test:weekly": "tsx --test tests/weekly-planning.test.ts",
@@ -19,6 +19,7 @@
     "test:planning-safeguards": "tsx --test tests/planning-safeguards.integration.test.ts",
     "test:auth-email": "tsx --test tests/auth-email.test.ts",
     "test:weekly-milestone": "tsx --test tests/weekly-milestone.integration.test.ts",
+    "test:master-mode": "tsx --test tests/master-mode.test.ts",
     "lint": "eslint . --ignore-pattern .next --ignore-pattern dist --ignore-pattern .vite-cache --ignore-pattern .vite-local-cache --ignore-pattern .vite-local-cache-v2 --ignore-pattern .wrangler",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.mjs"

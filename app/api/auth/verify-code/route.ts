@@ -16,13 +16,15 @@ export async function POST(request: Request) {
     await env.DB.prepare("UPDATE auth_codes SET attempts=attempts+1 WHERE id=?").bind(item.id).run();
     return Response.json({ error: "That code is incorrect." }, { status: 400 });
   }
-  const userId = userIdFor(email);
+  const proposedUserId = userIdFor(email);
   const now = new Date().toISOString();
   await env.DB.batch([
-    env.DB.prepare("INSERT INTO users (id,email,display_name,timezone,created_at) VALUES (?,?,?,'America/New_York',?) ON CONFLICT(email) DO NOTHING").bind(userId, email, email.split("@")[0], now),
+    env.DB.prepare("INSERT INTO users (id,email,display_name,timezone,created_at) VALUES (?,?,?,'America/New_York',?) ON CONFLICT(email) DO NOTHING").bind(proposedUserId, email, email.split("@")[0], now),
     env.DB.prepare("UPDATE auth_codes SET consumed_at=? WHERE id=?").bind(now, item.id),
   ]);
-  const session = await createSession(userId);
+  const account = await env.DB.prepare("SELECT id FROM users WHERE email=?").bind(email).first<{ id: string }>();
+  if (!account) return Response.json({ error: "Unable to access that account." }, { status: 500 });
+  const session = await createSession(account.id);
   const response = Response.json({ ok: true });
   response.headers.append("set-cookie", `${SESSION_COOKIE}=${session.token}; Path=/; HttpOnly; SameSite=Lax; Expires=${session.expiresAt.toUTCString()}${new URL(request.url).protocol === "https:" ? "; Secure" : ""}`);
   return response;

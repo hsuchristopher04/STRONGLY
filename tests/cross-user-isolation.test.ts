@@ -25,6 +25,9 @@ async function databaseFixture() {
     readFile(new URL("../drizzle/0001_prestige_system.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0002_new_user_walkthrough.sql", import.meta.url), "utf8"),
     readFile(new URL("../drizzle/0003_weekly_milestone_provenance.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0004_goal_lifecycle.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0005_master_mode.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0006_verified_email_change.sql", import.meta.url), "utf8"),
   ]);
   for (const migration of migrations) await pool.query(migration);
   await db.batch([

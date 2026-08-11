@@ -6,10 +6,10 @@ type Identity = { email: string; displayName: string; fullName: string | null };
 type Section = "Today" | "Week" | "Goals" | "History" | "Prestige" | "Settings";
 type Quest = { id: string; title: string; complete: boolean; kind?: "required" | "bonus"; milestone_id?: string | null; day_index?: number | null; position?: number };
 type Milestone = { id: string; title: string; complete: boolean; position: number };
-type Goal = { id: string; title: string; description: string; target_date: string | null; milestones: Milestone[] };
-type Profile = { email: string; displayName: string; timezone: string; onboardingComplete: boolean };
+type Goal = { id: string; title: string; description: string; target_date: string | null; status: "active" | "completed" | "archived"; featured: number; completed_at: string | null; archived_at: string | null; milestones: Milestone[] };
+type Profile = { email: string; displayName: string; timezone: string; onboardingComplete: boolean; masterMode: boolean };
 type Prestige = { points: number; level: number; title: string; nextThreshold: number | null; nextTitle: string | null; progress: number; tiers: Array<{ level: number; threshold: number; title: string }> };
-type PlannerWeek = { id: string; startsOn: string; endsOn: string; status: string; editable: boolean; lockReason: string | null; required: Quest[]; bonus: Array<{ dayIndex: number; quests: Quest[] }>; weekly: Quest[]; days: Array<{ dayIndex: number; date: string; requiredComplete: number; bonusAssigned: number; bonusComplete: number; strong: boolean; active: boolean }> };
+type PlannerWeek = { id: string; startsOn: string; endsOn: string; status: string; editable: boolean; lockReason: string | null; required: Quest[]; bonus: Array<{ dayIndex: number; quests: Quest[] }>; weekly: Quest[]; days: Array<{ dayIndex: number; date: string; requiredComplete: number; bonusAssigned: number; bonusComplete: number; completedQuestIds: string[]; strong: boolean; active: boolean }> };
 type HistoryWeek = { id: string; startsOn: string; endsOn: string; days: Array<{ date: string; requiredComplete: number; bonusAssigned: number; bonusComplete: number; strong: boolean }>; strongDays: number; weeklyCompleted: number; weeklyAssigned: number; pointsEarned: number; rank: string };
 type CampaignHistory = { summary: { currentStreak: number; strongDays: number; lifetimePoints: number }; weeks: HistoryWeek[] };
 type WeekPlanPayload = { startsOn: string; required: string[]; bonus: Array<{ dayIndex: number; titles: string[] }>; weekly: Array<{ title: string; milestoneId: string | null }> };
@@ -62,7 +62,7 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
   const [bonus, setBonus] = useState(bonusSeed);
   const [weekly, setWeekly] = useState(weekSeed);
   const [toast, setToast] = useState("");
-  const [profile, setProfile] = useState<Profile>({ email: identity.email, displayName: identity.fullName ?? "Hero", timezone: "America/New_York", onboardingComplete: true });
+  const [profile, setProfile] = useState<Profile>({ email: identity.email, displayName: identity.fullName ?? "Hero", timezone: "America/New_York", onboardingComplete: true, masterMode: false });
   const [prestige, setPrestige] = useState<Prestige>({ points: 0, level: 0, title: "Unprestiged", nextThreshold: 1_000, nextTitle: "Iron Resolve", progress: 0, tiers: [] });
   const [goals, setGoals] = useState<Goal[]>([]);
   const [today, setToday] = useState(new Date().toISOString().slice(0, 10));
@@ -72,6 +72,7 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
   const [history, setHistory] = useState<CampaignHistory>({ summary: { currentStreak: 0, strongDays: 0, lifetimePoints: 0 }, weeks: [] });
   const [walkthroughOpen, setWalkthroughOpen] = useState(false);
   const [walkthroughStep, setWalkthroughStep] = useState(0);
+  const [accountOpen, setAccountOpen] = useState(false);
   const requiredDone = required.filter((q) => q.complete).length;
   const progress = Math.round((requiredDone / 3) * 100);
 
@@ -144,6 +145,16 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
     window.setTimeout(() => setToast(""), 2200);
   }
 
+  async function updateGoalLifecycle(action: { type: "goal-status"; goalId: string; status: "active" | "completed" | "archived" } | { type: "feature-goal" | "delete-goal"; goalId: string }) {
+    try {
+      await post(action);
+      if (action.type === "feature-goal") setToast("Today goal updated");
+      else if (action.type === "delete-goal") setToast("Goal permanently deleted");
+      else if ("status" in action) setToast(action.status === "completed" ? "Goal completed" : action.status === "archived" ? "Goal archived" : "Goal restored");
+    } catch (error) { setToast(error instanceof Error ? error.message : "Unable to update goal"); }
+    window.setTimeout(() => setToast(""), 2600);
+  }
+
   async function saveProfile(displayName: string, timezone: string) {
     try {
       await post({ type: "profile", displayName, timezone });
@@ -152,6 +163,22 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
       setToast(error instanceof Error ? error.message : "Unable to save profile");
     }
     window.setTimeout(() => setToast(""), 2200);
+  }
+
+  async function setMasterMode(enabled: boolean) {
+    try {
+      await post({ type: "master-mode", enabled });
+      setToast(enabled ? "Master Mode enabled" : "Master Mode disabled");
+    } catch (error) { setToast(error instanceof Error ? error.message : "Unable to update Master Mode"); }
+    window.setTimeout(() => setToast(""), 2400);
+  }
+
+  async function correctPastQuest(questId: string, completedOn: string) {
+    try {
+      await post({ type: "toggle-daily", questId, completedOn });
+      setToast("Past-day record corrected");
+    } catch (error) { setToast(error instanceof Error ? error.message : "Unable to correct that day"); }
+    window.setTimeout(() => setToast(""), 2400);
   }
 
   function startWalkthrough() {
@@ -182,14 +209,14 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
   }
 
   const content = useMemo(() => {
-    if (section === "Today") return <Today required={required} bonus={bonus} weekly={weekly} progress={progress} toggleQuest={toggleQuest} today={today} week={planner[0]} displayName={profile.displayName} />;
-    if (section === "Week") return <WeekView weeks={planner} goals={goals} savePlan={async (plan) => { try { await post({ type: "plan-week", ...plan }); setToast(plan.startsOn === planner[0]?.startsOn ? "Current campaign saved" : "Next campaign saved"); } catch (error) { setToast(error instanceof Error ? error.message : "Unable to save week"); } }} />;
-    if (section === "Goals") return <Goals goals={goals} toggleMilestone={toggleMilestone} saveGoal={saveGoal} />;
+    if (section === "Today") return <Today required={required} bonus={bonus} weekly={weekly} goals={goals} prestige={prestige} progress={progress} toggleQuest={toggleQuest} today={today} week={planner[0]} displayName={profile.displayName} onViewWeek={() => setSection("Week")} onViewGoals={() => setSection("Goals")} onViewPrestige={() => setSection("Prestige")} />;
+    if (section === "Week") return <WeekView weeks={planner} goals={goals.filter((goal) => goal.status === "active")} today={today} masterMode={profile.masterMode} correctPastQuest={correctPastQuest} savePlan={async (plan) => { try { await post({ type: "plan-week", ...plan }); setToast(plan.startsOn === planner[0]?.startsOn ? "Current campaign saved" : "Next campaign saved"); } catch (error) { setToast(error instanceof Error ? error.message : "Unable to save week"); } }} />;
+    if (section === "Goals") return <Goals goals={goals} toggleMilestone={toggleMilestone} saveGoal={saveGoal} updateLifecycle={updateGoalLifecycle} />;
     if (section === "History") return <History history={history} />;
     if (section === "Prestige") return <PrestigeView prestige={prestige} />;
-    return <Settings key={`${profile.displayName}:${profile.timezone}`} profile={profile} saveProfile={saveProfile} startWalkthrough={startWalkthrough} />;
+    return <Settings key={`${profile.displayName}:${profile.timezone}`} profile={profile} saveProfile={saveProfile} setMasterMode={setMasterMode} startWalkthrough={startWalkthrough} />;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [section, required, bonus, weekly, progress, prestige, planner, history, today, profile]);
+  }, [section, required, bonus, weekly, goals, progress, prestige, planner, history, today, profile]);
 
   return (
     <div className="app-shell theme-obsidian">
@@ -197,7 +224,7 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
         <div className="brand">STRONGLY<span>.</span></div>
         <div className="profile">
           <div className="avatar">C</div>
-          <div><b>{identity.fullName?.split(" ")[0] ?? "Hero"}</b><span><i /> Prestige {prestige.level} · {prestige.title}</span></div>
+          <div><b>{profile.displayName}</b><span><i /> Prestige {prestige.level} · {prestige.title}</span></div>
         </div>
         <nav aria-label="Primary navigation">
           <p>YOUR CAMPAIGN</p>
@@ -210,7 +237,7 @@ export default function StronglyApp({ identity }: { identity: Identity }) {
         <header className="topbar">
           <button className="menu-button" aria-label="Open navigation" onClick={() => setMobileNav(!mobileNav)}>☰</button>
           <div className="week-title"><small>THIS CAMPAIGN</small><b>{planner[0] ? `${formatShortDate(planner[0].startsOn)} – ${formatShortDate(planner[0].endsOn)}` : "Loading week…"}</b></div>
-          <div className="top-actions"><div className="streak"><span>♨</span><b>{history.summary.currentStreak}</b><small>DAY STREAK</small></div><div className="prestige-chip"><span>✦</span><b>{prestige.points.toLocaleString()}</b><small>PRESTIGE POINTS</small></div><button className="round" aria-label="Notifications">♟<i /></button></div>
+          <div className="top-actions"><div className="streak"><span>♨</span><b>{history.summary.currentStreak}</b><small>DAY STREAK</small></div><div className="prestige-chip"><span>✦</span><b>{prestige.points.toLocaleString()}</b><small>PRESTIGE POINTS</small></div><div className="account-anchor"><button className="round" aria-label="Open profile" aria-expanded={accountOpen} onClick={() => setAccountOpen(!accountOpen)}>♟<i /></button>{accountOpen && <AccountPanel profile={profile} onClose={() => setAccountOpen(false)} onSaveName={async (displayName) => { await saveProfile(displayName, profile.timezone); }} onEmailChanged={(email) => setProfile((current) => ({ ...current, email }))} />}</div></div>
         </header>
         <main className="app-main">{content}</main>
       </div>
@@ -227,13 +254,24 @@ function QuestRow({ quest, onToggle }: { quest: Quest; onToggle: () => void }) {
   </button>;
 }
 
-function Today({ required, bonus, weekly, progress, toggleQuest, today, week, displayName }: { required: Quest[]; bonus: Quest[]; weekly: Quest[]; progress: number; toggleQuest: (g: "required" | "bonus" | "weekly", id: string) => void; today: string; week?: PlannerWeek; displayName: string }) {
+function PrestigeSeal({ prestige, onClick }: { prestige: Prestige; onClick: () => void }) {
+  const percentage = prestige.nextThreshold ? Math.max(0, Math.min(100, Math.round(prestige.progress))) : 100;
+  const label = prestige.nextThreshold ? `${percentage}% toward Prestige ${prestige.level + 1}, ${prestige.nextTitle}` : "Maximum prestige achieved";
+  return <button className="rank-seal prestige-seal" onClick={onClick} aria-label={`${label}. View prestige progress.`}><svg viewBox="0 0 100 100" aria-hidden="true"><circle className="prestige-track" cx="50" cy="50" r="44" /><circle className="prestige-meter" cx="50" cy="50" r="44" pathLength="100" strokeDasharray={`${percentage} 100`} /></svg><span>✦</span><b>{percentage}%</b><small>{prestige.nextThreshold ? `TO P${prestige.level + 1}` : "COMPLETE"}</small></button>;
+}
+
+function Today({ required, bonus, weekly, goals, prestige, progress, toggleQuest, today, week, displayName, onViewWeek, onViewGoals, onViewPrestige }: { required: Quest[]; bonus: Quest[]; weekly: Quest[]; goals: Goal[]; prestige: Prestige; progress: number; toggleQuest: (g: "required" | "bonus" | "weekly", id: string) => void; today: string; week?: PlannerWeek; displayName: string; onViewWeek: () => void; onViewGoals: () => void; onViewPrestige: () => void }) {
   const strongDay = required.filter((quest) => quest.complete).length === 3 && bonus.every((quest) => quest.complete);
+  const activeGoals = goals.filter((goal) => goal.status === "active");
+  const activeGoal = activeGoals.find((goal) => Boolean(goal.featured)) ?? activeGoals.find((goal) => goal.milestones.some((milestone) => !milestone.complete)) ?? activeGoals[0];
+  const completedMilestones = activeGoal?.milestones.filter((milestone) => milestone.complete).length ?? 0;
+  const milestoneCount = activeGoal?.milestones.length ?? 0;
+  const goalProgress = milestoneCount === 0 ? 0 : Math.round((completedMilestones / milestoneCount) * 100);
   const strongDayRequirement = bonus.length === 0
     ? "Complete all 3 required quests · +10 PP"
     : `Complete all 3 required and ${bonus.length} bonus ${bonus.length === 1 ? "quest" : "quests"} · +10 PP`;
   return <>
-    <section className="welcome"><div><p className="eyebrow">{formatLongDate(today)}</p><h1>Good afternoon, <em>{displayName}.</em></h1><p>{strongDay ? "Strong Day secured. You earned 10 bonus prestige points." : bonus.length > 0 ? "Finish every required and scheduled bonus quest to secure today’s Strong Day." : "Finish your three required quests and strengthen today’s record."}</p></div><div className="rank-seal"><span>✦</span><small>BUILD PRESTIGE</small></div></section>
+    <section className="welcome"><div><p className="eyebrow">{formatLongDate(today)}</p><h1>Good afternoon, <em>{displayName}.</em></h1><p>{strongDay ? "Strong Day secured. You earned 10 bonus prestige points." : bonus.length > 0 ? "Finish every required and scheduled bonus quest to secure today’s Strong Day." : "Finish your three required quests and strengthen today’s record."}</p></div><PrestigeSeal prestige={prestige} onClick={onViewPrestige} /></section>
     <section className="day-strip">{week?.days.map((day) => <div className={day.active ? "active" : ""} key={day.date}><small>{formatDay(day.date)}</small><b>{dateFromIso(day.date).getUTCDate()}</b><span>{day.date <= today ? `${day.requiredComplete}/3` : "—"}</span></div>)}</section>
     <div className="dashboard-grid">
       <section className="panel daily-panel">
@@ -245,19 +283,25 @@ function Today({ required, bonus, weekly, progress, toggleQuest, today, week, di
         <div className="quest-list compact">{bonus.map((q) => <QuestRow key={q.id} quest={q} onToggle={() => toggleQuest("bonus", q.id)} />)}</div>
       </section>
       <aside className="side-stack">
-        <section className="panel weekly-panel"><div className="panel-title"><div><p className="eyebrow">WEEKLY QUESTS</p><h2>The campaign</h2></div><span>{weekly.filter(q => q.complete).length}/{weekly.length}</span></div>{weekly.map((q) => <QuestRow key={q.id} quest={q} onToggle={() => toggleQuest("weekly", q.id)} />)}<button className="text-button">View full week <span>→</span></button></section>
-        <section className="panel goal-peek"><p className="eyebrow">ACTIVE GOAL</p><div><span>◆</span><small>90 DAY QUEST</small></div><h3>Run my first half marathon</h3><div className="goal-progress"><span style={{ width: "60%" }} /></div><footer><b>3 of 5 milestones</b><span>Oct 18</span></footer></section>
+        <section className="panel weekly-panel"><div className="panel-title"><div><p className="eyebrow">WEEKLY QUESTS</p><h2>The campaign</h2></div><span>{weekly.filter(q => q.complete).length}/{weekly.length}</span></div>{weekly.map((q) => <QuestRow key={q.id} quest={q} onToggle={() => toggleQuest("weekly", q.id)} />)}<button className="text-button" onClick={onViewWeek}>View full week <span>→</span></button></section>
+        {activeGoal ? <section className="panel goal-peek"><p className="eyebrow">ACTIVE GOAL</p><div><span>◆</span><small>{activeGoal.target_date ? `TARGET · ${formatShortDate(activeGoal.target_date)}` : "LONG-TERM QUEST"}</small></div><h3>{activeGoal.title}</h3><div className="goal-progress" aria-label={`${goalProgress}% complete`}><span style={{ width: `${goalProgress}%` }} /></div><footer><b>{completedMilestones} of {milestoneCount} {milestoneCount === 1 ? "milestone" : "milestones"}</b><button className="text-button goal-peek-link" onClick={onViewGoals}>View goal <span>→</span></button></footer></section> : <section className="panel goal-peek goal-peek-empty"><p className="eyebrow">ACTIVE GOAL</p><div><span>◇</span><small>NO JOURNEY YET</small></div><h3>Choose what you want to conquer next.</h3><p>Build a long-term goal and divide it into milestones.</p><button className="text-button goal-peek-link" onClick={onViewGoals}>Create a goal <span>→</span></button></section>}
       </aside>
     </div>
   </>;
 }
 
-function WeekView({ weeks, goals, savePlan }: { weeks: PlannerWeek[]; goals: Goal[]; savePlan: (plan: WeekPlanPayload) => Promise<void> }) {
+function WeekDayQuest({ quest, completed, editable, bonus, onToggle }: { quest: Quest; completed: boolean; editable: boolean; bonus?: boolean; onToggle: () => void }) {
+  const content = <><i className={completed ? "done" : ""}>{completed ? "✓" : bonus ? "+" : ""}</i><span>{quest.title}</span></>;
+  return editable ? <button className={`day-quest-line ${bonus ? "bonus-line" : ""}`} onClick={onToggle} aria-label={`${completed ? "Reopen" : "Complete"} ${quest.title}`}>{content}</button> : <div className={bonus ? "bonus-line" : ""}>{content}</div>;
+}
+
+function WeekView({ weeks, goals, today, masterMode, correctPastQuest, savePlan }: { weeks: PlannerWeek[]; goals: Goal[]; today: string; masterMode: boolean; correctPastQuest: (questId: string, completedOn: string) => Promise<void>; savePlan: (plan: WeekPlanPayload) => Promise<void> }) {
   const current = weeks[0];
   const next = weeks[1];
   return <section className="page-section"><PageHeader eyebrow="WEEKLY CALENDAR" title="Your campaign map" copy="Your quests now follow the calendar in your saved timezone." />
+    {masterMode && <aside className="master-mode-banner" role="status"><span>◆</span><div><b>Master Mode enabled</b><p>You may correct quests from earlier days in this campaign. STRONGLY trusts you to keep your record honest.</p></div></aside>}
     {!current && <article className="panel planner-empty"><h2>Your campaign could not be loaded</h2><p>Run the latest database migrations, then refresh this page.</p><code>npm run db:migrate</code></article>}
-    {current && <><div className="week-grid">{current.days.map((day) => <article className={`panel day-card ${day.active ? "active" : ""}`} key={day.date}><header><small>{formatDay(day.date)}</small><b>{dateFromIso(day.date).getUTCDate()}</b></header>{current.required.map((quest) => <div key={quest.id}><i className={day.requiredComplete === 3 ? "done" : ""}>{day.requiredComplete === 3 ? "✓" : ""}</i><span>{quest.title}</span></div>)}{current.bonus.find((item) => item.dayIndex === day.dayIndex)?.quests.map((quest, index) => <div className="bonus-line" key={quest.id}><i className={index < day.bonusComplete ? "done" : ""}>{index < day.bonusComplete ? "✓" : "+"}</i><span>{quest.title}</span></div>)}<footer>{day.strong ? "✦ Strong Day · +10 PP" : day.date < (current.days.find((item) => item.active)?.date ?? "") ? `${day.requiredComplete}/3 required · ${day.bonusComplete}/${day.bonusAssigned} bonus` : day.active ? `${day.requiredComplete}/3 required · ${day.bonusComplete}/${day.bonusAssigned} bonus` : "Upcoming"}</footer></article>)}</div><WeekPlanForm key={`current-${current.id}`} week={current} goals={goals} savePlan={savePlan} /></>}
+    {current && <><div className="week-grid">{current.days.map((day) => { const editablePastDay = masterMode && current.status === "active" && day.date < today; return <article className={`panel day-card ${day.active ? "active" : ""} ${editablePastDay ? "master-editable" : ""}`} key={day.date}><header><small>{formatDay(day.date)}</small><b>{dateFromIso(day.date).getUTCDate()}</b>{editablePastDay && <em>EDITABLE</em>}</header>{current.required.map((quest) => <WeekDayQuest key={quest.id} quest={quest} completed={day.completedQuestIds.includes(quest.id)} editable={editablePastDay} onToggle={() => void correctPastQuest(quest.id, day.date)} />)}{current.bonus.find((item) => item.dayIndex === day.dayIndex)?.quests.map((quest) => <WeekDayQuest bonus key={quest.id} quest={quest} completed={day.completedQuestIds.includes(quest.id)} editable={editablePastDay} onToggle={() => void correctPastQuest(quest.id, day.date)} />)}<footer>{day.strong ? "✦ Strong Day · +10 PP" : day.date < today ? `${day.requiredComplete}/3 required · ${day.bonusComplete}/${day.bonusAssigned} bonus` : day.active ? `${day.requiredComplete}/3 required · ${day.bonusComplete}/${day.bonusAssigned} bonus` : "Upcoming"}</footer></article>; })}</div><WeekPlanForm key={`current-${current.id}`} week={current} goals={goals} savePlan={savePlan} /></>}
     {next && <WeekPlanForm key={`next-${next.id}`} week={next} goals={goals} savePlan={savePlan} />}
   </section>;
 }
@@ -301,11 +345,11 @@ function WeekPlanForm({ week, goals, savePlan }: { week: PlannerWeek; goals: Goa
   </form>;
 }
 
-function Goals({ goals, toggleMilestone, saveGoal }: { goals: Goal[]; toggleMilestone: (id: string) => void; saveGoal: (goal: { goalId?: string; title: string; description: string; targetDate: string | null; milestones: Array<{ id?: string; title: string }> }) => Promise<void> }) {
+function Goals({ goals, toggleMilestone, saveGoal, updateLifecycle }: { goals: Goal[]; toggleMilestone: (id: string) => void; saveGoal: (goal: { goalId?: string; title: string; description: string; targetDate: string | null; milestones: Array<{ id?: string; title: string }> }) => Promise<void>; updateLifecycle: (action: { type: "goal-status"; goalId: string; status: "active" | "completed" | "archived" } | { type: "feature-goal" | "delete-goal"; goalId: string }) => Promise<void> }) {
   const [editing, setEditing] = useState<Goal | "new" | null>(null);
   return <section className="page-section"><header className="page-header"><div><p className="eyebrow">LONG-TERM GOALS</p><h1>Build your legend</h1><p>Break ambitious goals into milestones you can conquer.</p></div><button className="button button-gold" onClick={() => setEditing("new")}>+ New goal</button></header>
     {goals.length === 0 ? <article className="panel goals-empty"><span>◆</span><h2>Set your first long-term goal</h2><p>Define the outcome you want, choose a target date, and divide the journey into milestones.</p><button className="button button-gold" onClick={() => setEditing("new")}>Create a goal</button></article> :
-      <div className="goal-list">{goals.map((goal) => { const doneCount = goal.milestones.filter((item) => item.complete).length; return <article className="panel featured-goal" key={goal.id}><div className="goal-rune">◆</div><div className="goal-meta"><span>ACTIVE GOAL</span><small>Target: {goal.target_date ? formatShortDate(goal.target_date) : "No date"}</small></div><h2>{goal.title}</h2><p>{goal.description || "No description yet."}</p><div className="goal-progress large"><span style={{ width: `${goal.milestones.length ? (doneCount / goal.milestones.length) * 100 : 0}%` }} /></div><div className="goal-summary"><b>{doneCount} of {goal.milestones.length} milestones complete</b><button className="text-button" onClick={() => setEditing(goal)}>Edit goal</button></div><div className="milestones">{goal.milestones.map((item, index) => <button className={item.complete ? "done" : ""} key={item.id} onClick={() => toggleMilestone(item.id)}><i>{item.complete ? "✓" : index + 1}</i><span>{item.title}<small>{item.complete ? "Completed" : "Milestone"}</small></span><em>{item.complete ? "DONE" : "OPEN"}</em></button>)}</div></article>; })}</div>}
+      <div className="goal-list">{goals.map((goal) => { const doneCount = goal.milestones.filter((item) => item.complete).length; const inactive = goal.status !== "active"; return <article className={`panel featured-goal goal-${goal.status}`} key={goal.id}><div className="goal-rune">{goal.featured ? "✦" : "◆"}</div><div className="goal-meta"><span>{goal.featured ? "TODAY GOAL" : `${goal.status.toUpperCase()} GOAL`}</span><small>Target: {goal.target_date ? formatShortDate(goal.target_date) : "No date"}</small></div><h2>{goal.title}</h2><p>{goal.description || "No description yet."}</p><div className="goal-progress large"><span style={{ width: `${goal.milestones.length ? (doneCount / goal.milestones.length) * 100 : 0}%` }} /></div><div className="goal-summary"><b>{doneCount} of {goal.milestones.length} milestones complete</b><div className="goal-actions">{goal.status === "active" && !goal.featured && <button className="text-button" onClick={() => void updateLifecycle({ type: "feature-goal", goalId: goal.id })}>Show on Today</button>}<button className="text-button" onClick={() => setEditing(goal)}>Edit</button>{goal.status === "active" && <button className="text-button" onClick={() => void updateLifecycle({ type: "goal-status", goalId: goal.id, status: "completed" })}>Complete goal</button>}{goal.status !== "archived" && <button className="text-button" onClick={() => void updateLifecycle({ type: "goal-status", goalId: goal.id, status: "archived" })}>Archive</button>}{inactive && <button className="text-button" onClick={() => void updateLifecycle({ type: "goal-status", goalId: goal.id, status: "active" })}>Restore</button>}<button className="text-button danger" onClick={() => { if (window.confirm(`Permanently delete “${goal.title}” and all of its milestones?`)) void updateLifecycle({ type: "delete-goal", goalId: goal.id }); }}>Delete</button></div></div><div className="milestones">{goal.milestones.map((item, index) => <button disabled={inactive} className={item.complete ? "done" : ""} key={item.id} onClick={() => toggleMilestone(item.id)}><i>{item.complete ? "✓" : index + 1}</i><span>{item.title}<small>{item.complete ? "Completed" : "Milestone"}</small></span><em>{item.complete ? "DONE" : "OPEN"}</em></button>)}</div></article>; })}</div>}
     {editing && <GoalForm goal={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} onSave={async (goal) => { await saveGoal(goal); setEditing(null); }} />}
   </section>;
 }
@@ -322,7 +366,8 @@ function GoalForm({ goal, onClose, onSave }: { goal?: Goal; onClose: () => void;
     try { await onSave({ goalId: goal?.id, title, description, targetDate: targetDate || null, milestones }); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to save goal"); setSaving(false); }
   }
-  return <div className="form-modal-backdrop"><form className="panel goal-form" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="goal-form-title"><header><div><p className="eyebrow">{goal ? "EDIT JOURNEY" : "NEW JOURNEY"}</p><h2 id="goal-form-title">{goal ? "Refine your goal" : "Create a long-term goal"}</h2></div><button type="button" onClick={onClose} aria-label="Close goal form">×</button></header><label>Goal title<input required maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Run my first half marathon" /></label><label>Description<textarea maxLength={1000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What does success look like?" /></label><label>Target date <small>Optional</small><input type="date" value={targetDate} onChange={(event) => setTargetDate(event.target.value)} /></label><section><div><b>Milestones</b><small>1–10 ordered steps</small></div>{milestones.map((milestone, index) => <div className="milestone-input" key={milestone.id ?? index}><span>{index + 1}</span><input required maxLength={120} value={milestone.title} onChange={(event) => setMilestones(milestones.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Define the next concrete step" />{milestones.length > 1 && <button type="button" onClick={() => setMilestones(milestones.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remove milestone ${index + 1}`}>×</button>}</div>)}{milestones.length < 10 && <button type="button" className="text-button" onClick={() => setMilestones([...milestones, { title: "" }])}>+ Add milestone</button>}</section>{error && <p className="form-error" role="alert">{error}</p>}<footer><button type="button" className="walkthrough-back" onClick={onClose}>Cancel</button><button className="button button-gold" disabled={saving}>{saving ? "Saving…" : "Save goal"}</button></footer></form></div>;
+  const moveMilestone = (index: number, direction: -1 | 1) => { const next = index + direction; if (next < 0 || next >= milestones.length) return; const reordered = [...milestones]; [reordered[index], reordered[next]] = [reordered[next], reordered[index]]; setMilestones(reordered); };
+  return <div className="form-modal-backdrop"><form className="panel goal-form" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="goal-form-title"><header><div><p className="eyebrow">{goal ? "EDIT JOURNEY" : "NEW JOURNEY"}</p><h2 id="goal-form-title">{goal ? "Refine your goal" : "Create a long-term goal"}</h2></div><button type="button" onClick={onClose} aria-label="Close goal form">×</button></header><label>Goal title<input required maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Run my first half marathon" /></label><label>Description<textarea maxLength={1000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What does success look like?" /></label><label>Target date <small>Optional</small><input type="date" value={targetDate} onChange={(event) => setTargetDate(event.target.value)} /></label><section><div><b>Milestones</b><small>1–10 ordered steps</small></div>{milestones.map((milestone, index) => <div className="milestone-input" key={milestone.id ?? index}><span>{index + 1}</span><input required maxLength={120} value={milestone.title} onChange={(event) => setMilestones(milestones.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Define the next concrete step" /><div className="milestone-order"><button type="button" disabled={index === 0} onClick={() => moveMilestone(index, -1)} aria-label={`Move milestone ${index + 1} up`}>↑</button><button type="button" disabled={index === milestones.length - 1} onClick={() => moveMilestone(index, 1)} aria-label={`Move milestone ${index + 1} down`}>↓</button></div>{milestones.length > 1 && <button type="button" className="milestone-remove" onClick={() => setMilestones(milestones.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remove milestone ${index + 1}`}>×</button>}</div>)}{milestones.length < 10 && <button type="button" className="text-button" onClick={() => setMilestones([...milestones, { title: "" }])}>+ Add milestone</button>}</section>{error && <p className="form-error" role="alert">{error}</p>}<footer><button type="button" className="walkthrough-back" onClick={onClose}>Cancel</button><button className="button button-gold" disabled={saving}>{saving ? "Saving…" : "Save goal"}</button></footer></form></div>;
 }
 
 function History({ history }: { history: CampaignHistory }) {
@@ -341,15 +386,38 @@ function PrestigeView({ prestige }: { prestige: Prestige }) {
   </section>;
 }
 
-function Settings({ profile, saveProfile, startWalkthrough }: { profile: Profile; saveProfile: (displayName: string, timezone: string) => void; startWalkthrough: () => void }) {
+function AccountPanel({ profile, onClose, onSaveName, onEmailChanged }: { profile: Profile; onClose: () => void; onSaveName: (displayName: string) => Promise<void>; onEmailChanged: (email: string) => void }) {
   const [displayName, setDisplayName] = useState(profile.displayName);
-  const [timezone, setTimezone] = useState(profile.timezone);
-  async function signOut() {
-    await fetch("/api/auth/sign-out", { method: "POST" });
-    window.location.assign("/");
+  const [email, setEmail] = useState(profile.email);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function requestEmailChange() {
+    setBusy(true); setMessage("");
+    const response = await fetch("/api/account/request-email-change", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
+    const payload = await response.json() as { error?: string; devCode?: string };
+    if (!response.ok) setMessage(payload.error ?? "Unable to send verification code");
+    else { setPendingEmail(email.trim().toLowerCase()); setCode(payload.devCode ?? ""); setMessage(payload.devCode ? `Development code: ${payload.devCode}` : "Verification code sent to your new email."); }
+    setBusy(false);
   }
+  async function verifyEmailChange() {
+    if (!pendingEmail) return;
+    setBusy(true); setMessage("");
+    const response = await fetch("/api/account/verify-email-change", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: pendingEmail, code }) });
+    const payload = await response.json() as { error?: string; email?: string };
+    if (!response.ok) setMessage(payload.error ?? "Unable to verify that code");
+    else { onEmailChanged(payload.email ?? pendingEmail); setEmail(payload.email ?? pendingEmail); setPendingEmail(null); setCode(""); setMessage("Account email updated."); }
+    setBusy(false);
+  }
+  async function signOut() { await fetch("/api/auth/sign-out", { method: "POST" }); window.location.assign("/"); }
+  return <section className="account-panel" role="dialog" aria-label="Profile and account"><header><div><p className="eyebrow">YOUR ACCOUNT</p><h2>Profile</h2><p>Manage the identity attached to your campaign.</p></div><button onClick={onClose} aria-label="Close profile">×</button></header><div className="account-section"><div className="account-section-title"><span>◆</span><div><b>Username</b><small>How your name appears throughout STRONGLY.</small></div></div><label htmlFor="account-username">Username</label><input id="account-username" maxLength={80} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /><button className="button account-save" disabled={busy || !displayName.trim() || displayName.trim() === profile.displayName} onClick={async () => { setBusy(true); await onSaveName(displayName.trim()); setBusy(false); setMessage("Username updated."); }}>Save username</button></div><div className="account-section"><div className="account-section-title"><span>✦</span><div><b>Email address</b><small>A verification code is required before this changes.</small></div></div><label htmlFor="account-email">Email address</label><input id="account-email" type="email" value={email} onChange={(event) => { setEmail(event.target.value); setPendingEmail(null); setCode(""); }} />{pendingEmail ? <><label htmlFor="account-code">Verification code</label><input id="account-code" inputMode="numeric" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} placeholder="6-digit code" /><button className="button button-gold" disabled={busy || code.length !== 6} onClick={() => void verifyEmailChange()}>Verify new email</button></> : <button className="button account-email-button" disabled={busy || email.trim().toLowerCase() === profile.email} onClick={() => void requestEmailChange()}>Send verification code</button>}{message && <p className="account-message" role="status">{message}</p>}</div><footer><button className="account-signout" onClick={signOut}>Sign out</button></footer></section>;
+}
+
+function Settings({ profile, saveProfile, setMasterMode, startWalkthrough }: { profile: Profile; saveProfile: (displayName: string, timezone: string) => void; setMasterMode: (enabled: boolean) => Promise<void>; startWalkthrough: () => void }) {
+  const [timezone, setTimezone] = useState(profile.timezone);
   return <section className="page-section"><PageHeader eyebrow="PROFILE & SECURITY" title="Your adventurer’s record" copy="Manage your identity, timezone, and account access." />
-    <div className="settings-grid"><section className="panel settings-panel"><h3>Profile</h3><label>Display name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></label><label>Email address<input value={profile.email} disabled /></label><label>Timezone<select value={timezone} onChange={(event) => setTimezone(event.target.value)}><option>America/New_York</option><option>America/Chicago</option><option>America/Denver</option><option>America/Los_Angeles</option><option>Europe/London</option></select></label><button className="button button-gold" onClick={() => saveProfile(displayName, timezone)}>Save changes</button></section><aside><section className="panel security-card"><span>✦</span><div><h3>Passwordless security</h3><p>Your account is protected by one-time email codes. No password is stored by STRONGLY.</p><button className="auth-link" onClick={signOut}>Sign out</button></div></section><section className="panel settings-panel"><h3>Guidance</h3><p className="settings-copy">Review how daily quests, weekly planning, goals, History, and Prestige work.</p><button className="button walkthrough-replay" onClick={startWalkthrough}>Replay walkthrough</button></section><section className="panel settings-panel"><h3>Week preferences</h3><label className="toggle-row"><span><b>Week starts Sunday</b><small>Your campaigns close Saturday at midnight.</small></span><input type="checkbox" defaultChecked /></label><label className="toggle-row"><span><b>Reduced motion</b><small>Minimize completion animations.</small></span><input type="checkbox" /></label></section></aside></div>
+    <div className="settings-grid"><section className="panel settings-panel"><h3>Timezone</h3><p className="settings-copy">Dates, daily deadlines, and campaign rollover follow your saved timezone.</p><label>Timezone<select value={timezone} onChange={(event) => setTimezone(event.target.value)}><option>America/New_York</option><option>America/Chicago</option><option>America/Denver</option><option>America/Los_Angeles</option><option>Europe/London</option></select></label><button className="button button-gold" onClick={() => saveProfile(profile.displayName, timezone)}>Save timezone</button></section><aside><section className={`panel settings-panel master-mode-setting ${profile.masterMode ? "enabled" : ""}`}><div className="setting-heading"><div><p className="eyebrow">HONOR SYSTEM</p><h3>Master Mode</h3></div><label className="switch" aria-label="Master Mode"><input type="checkbox" checked={profile.masterMode} onChange={(event) => void setMasterMode(event.target.checked)} /><span /></label></div><p>Correct daily quests from earlier days in the current campaign. Future days and closed weeks always remain locked.</p><blockquote>Master Mode is intended for correcting honest mistakes—not manufacturing progress. STRONGLY trusts you to keep your record truthful.</blockquote><div className="campaign-rule"><span>◇</span><div><b>Campaign schedule</b><p>Every week begins Sunday and ends Saturday at 11:59 PM in your saved timezone.</p></div></div></section><section className="panel security-card"><span>✦</span><div><h3>Passwordless security</h3><p>Your account is protected by one-time email codes. Use the profile icon to update your username, verify a new email, or sign out.</p></div></section><section className="panel settings-panel"><h3>Guidance</h3><p className="settings-copy">Review how daily quests, weekly planning, goals, History, and Prestige work.</p><button className="button walkthrough-replay" onClick={startWalkthrough}>Replay walkthrough</button></section></aside></div>
   </section>;
 }
 

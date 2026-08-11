@@ -1,12 +1,12 @@
 import { db } from "../../../db";
 
-export type OwnedDailyQuest = { status: string; kind: "required" | "bonus"; day_index: number | null };
+export type OwnedDailyQuest = { status: string; starts_on: string; ends_on: string; kind: "required" | "bonus"; day_index: number | null };
 export type OwnedCompletion = { id: string };
 export type OwnedWeeklyQuest = { completed_at: string | null; status: string };
 export type OwnedMilestone = { completed_at: string | null; completed_by_weekly_quest_id: string | null };
 
 export function findDailyQuest(userId: string, questId: string) {
-  return db.prepare("SELECT q.kind,q.day_index,w.status FROM daily_quests q JOIN weeks w ON w.id=q.week_id WHERE q.id=? AND q.user_id=? AND w.user_id=?")
+  return db.prepare("SELECT q.kind,q.day_index,w.status,w.starts_on,w.ends_on FROM daily_quests q JOIN weeks w ON w.id=q.week_id WHERE q.id=? AND q.user_id=? AND w.user_id=?")
     .bind(questId, userId, userId).first<OwnedDailyQuest>();
 }
 

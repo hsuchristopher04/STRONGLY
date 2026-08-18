@@ -7,6 +7,18 @@ export class WeekPlanError extends Error {
   }
 }
 
+export async function saveWeekReflection(userId: string, weekId: string, reflection: string, previousWeek?: { masterMode: boolean; startsOn: string }) {
+  const week = await db.prepare("SELECT status,starts_on FROM weeks WHERE id=? AND user_id=?")
+    .bind(weekId, userId).first<{ status: string; starts_on: string }>();
+  if (!week) throw new WeekPlanError("Campaign not found", 404);
+  const canBacktrack = week.status === "closed" && previousWeek?.masterMode && week.starts_on === previousWeek.startsOn;
+  if (week.status !== "active" && !canBacktrack) throw new WeekPlanError(week.status === "closed"
+    ? "Only the previous campaign reflection can be revised while Master Mode is enabled"
+    : "Reflections can only be written for the current campaign");
+  await db.prepare("UPDATE weeks SET reflection=? WHERE id=? AND user_id=?")
+    .bind(reflection, weekId, userId).run();
+}
+
 export async function saveWeekPlan(userId: string, weekId: string, plan: ReturnType<typeof validateWeekPlan>) {
   await db.transaction(async (transaction) => {
     const week = await transaction.prepare("SELECT status FROM weeks WHERE id=? AND user_id=? FOR UPDATE")

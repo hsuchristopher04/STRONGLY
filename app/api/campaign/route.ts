@@ -1,12 +1,14 @@
 import { getAuthUser } from "../../auth";
 import { db } from "../../../db";
 import { findDailyQuest, updateProfile } from "./ownership-store";
-import { addDays, localDate, validateWeekPlan, type WeekPlanInput } from "./week-planning";
+import { addDays, localDate, validateWeekPlan, weekBounds, type WeekPlanInput } from "./week-planning";
 import { prestigeStatus, qualifiesForStrongDay } from "./prestige";
 import { DailyQuestError, toggleDailyQuest } from "./daily-quest-service";
 import { ensureWeekLifecycle } from "./week-lifecycle";
-import { saveWeekPlan, toggleMilestone, toggleWeeklyQuest, WeekPlanError } from "./week-plan-service";
+import { saveWeekPlan, saveWeekReflection, toggleMilestone, toggleWeeklyQuest, WeekPlanError } from "./week-plan-service";
 import { canEditDailyQuest } from "./master-mode";
+import { isValidTimeZone } from "../../../app/timezones";
+import { weeklyRank } from "./history";
 
 const env = { DB: db };
 
@@ -21,6 +23,7 @@ type Action =
   | { type: "master-mode"; enabled: boolean }
   | { type: "complete-onboarding" }
   | { type: "profile"; displayName: string; timezone: string }
+  | { type: "save-week-reflection"; weekId: string; reflection: string }
   | ({ type: "plan-week" } & WeekPlanInput);
 
 type QuestRow = { id: string; title: string; kind: "required" | "bonus"; day_index: number | null; position: number; complete: number };
@@ -61,7 +64,7 @@ async function prestigePoints(userId: string) {
 async function loadPlanner(userId: string, campaign: Awaited<ReturnType<typeof seedAccount>>) {
   const weekIds = [campaign.weekId, campaign.nextWeekId];
   const [weeks, daily, weekly, completions, completionDetails, dailyActivity, weeklyActivity] = await Promise.all([
-    env.DB.prepare("SELECT id,starts_on,ends_on,status FROM weeks WHERE user_id=? AND id IN (?,?) ORDER BY starts_on").bind(userId, ...weekIds).all<{ id: string; starts_on: string; ends_on: string; status: string }>(),
+    env.DB.prepare("SELECT id,starts_on,ends_on,status,reflection FROM weeks WHERE user_id=? AND id IN (?,?) ORDER BY starts_on").bind(userId, ...weekIds).all<{ id: string; starts_on: string; ends_on: string; status: string; reflection: string }>(),
     env.DB.prepare("SELECT id,week_id,title,kind,day_index,position FROM daily_quests WHERE user_id=? AND week_id IN (?,?) ORDER BY kind DESC,day_index,position").bind(userId, ...weekIds).all<{ id: string; week_id: string; title: string; kind: "required" | "bonus"; day_index: number | null; position: number }>(),
     env.DB.prepare("SELECT id,week_id,title,milestone_id,position,completed_at FROM weekly_quests WHERE user_id=? AND week_id IN (?,?) ORDER BY position").bind(userId, ...weekIds).all<{ id: string; week_id: string; title: string; milestone_id: string | null; position: number; completed_at: string | null }>(),
     env.DB.prepare("SELECT c.completed_on,q.kind,COUNT(*) count FROM daily_completions c JOIN daily_quests q ON q.id=c.quest_id WHERE c.user_id=? AND q.user_id=? AND c.completed_on>=? AND c.completed_on<=? GROUP BY c.completed_on,q.kind").bind(userId, userId, campaign.start, campaign.end).all<{ completed_on: string; kind: "required" | "bonus"; count: number }>(),
@@ -73,7 +76,7 @@ async function loadPlanner(userId: string, campaign: Awaited<ReturnType<typeof s
     const activityCount = Number(dailyActivity.results.find((item) => item.week_id === week.id)?.count ?? 0) + Number(weeklyActivity.results.find((item) => item.week_id === week.id)?.count ?? 0);
     const editable = week.status !== "closed" && activityCount === 0;
     return {
-    id: week.id, startsOn: week.starts_on, endsOn: week.ends_on, status: week.status, editable,
+    id: week.id, startsOn: week.starts_on, endsOn: week.ends_on, status: week.status, reflection: week.reflection, editable,
     lockReason: week.status === "closed" ? "This campaign is closed and preserved in History." : activityCount > 0 ? "Planning is locked while this campaign contains completed quests. Reopen them before changing the plan." : null,
     required: daily.results.filter((quest) => quest.week_id === week.id && quest.kind === "required"),
     bonus: Array.from({ length: 7 }, (_, dayIndex) => ({ dayIndex, quests: daily.results.filter((quest) => quest.week_id === week.id && quest.kind === "bonus" && quest.day_index === dayIndex) })),
@@ -90,19 +93,19 @@ async function loadPlanner(userId: string, campaign: Awaited<ReturnType<typeof s
 
 async function loadHistory(userId: string, timezone: string, today: string) {
   const [weeks, dailyQuests, dailyCompletions, weeklyQuests, ledger] = await Promise.all([
-    env.DB.prepare("SELECT id,starts_on,ends_on,status FROM weeks WHERE user_id=? ORDER BY starts_on DESC LIMIT 52")
-      .bind(userId).all<{ id: string; starts_on: string; ends_on: string; status: string }>(),
-    env.DB.prepare("SELECT week_id,kind,day_index FROM daily_quests WHERE user_id=?")
-      .bind(userId).all<{ week_id: string; kind: "required" | "bonus"; day_index: number | null }>(),
+    env.DB.prepare("SELECT id,starts_on,ends_on,status,reflection FROM weeks WHERE user_id=? ORDER BY starts_on DESC LIMIT 52")
+      .bind(userId).all<{ id: string; starts_on: string; ends_on: string; status: string; reflection: string }>(),
+    env.DB.prepare("SELECT id,week_id,title,kind,day_index,position FROM daily_quests WHERE user_id=? ORDER BY position")
+      .bind(userId).all<{ id: string; week_id: string; title: string; kind: "required" | "bonus"; day_index: number | null; position: number }>(),
     env.DB.prepare(
-      `SELECT q.week_id,q.kind,c.completed_on FROM daily_completions c
+      `SELECT q.week_id,q.kind,c.quest_id,c.completed_on FROM daily_completions c
        JOIN daily_quests q ON q.id=c.quest_id AND q.user_id=c.user_id
        WHERE c.user_id=?`,
-    ).bind(userId).all<{ week_id: string; kind: "required" | "bonus"; completed_on: string }>(),
+    ).bind(userId).all<{ week_id: string; kind: "required" | "bonus"; quest_id: string; completed_on: string }>(),
     env.DB.prepare(
-      `SELECT week_id,CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END complete
-       FROM weekly_quests WHERE user_id=?`,
-    ).bind(userId).all<{ week_id: string; complete: number }>(),
+      `SELECT week_id,title,position,CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END complete
+       FROM weekly_quests WHERE user_id=? ORDER BY position`,
+    ).bind(userId).all<{ week_id: string; title: string; position: number; complete: number }>(),
     env.DB.prepare("SELECT points,created_at FROM prestige_ledger WHERE user_id=?")
       .bind(userId).all<{ points: number; created_at: string }>(),
   ]);
@@ -138,10 +141,14 @@ async function loadHistory(userId: string, timezone: string, today: string) {
     weeks: weeks.results.filter((week) => week.status === "closed").map((week) => {
       const days = Array.from({ length: 7 }, (_, dayIndex) => {
         const date = addDays(week.starts_on, dayIndex);
-        const requiredComplete = Math.min(completedByDateAndKind.get(`${date}:required`) ?? 0, 3);
-        const bonusAssigned = dailyQuests.results.filter((quest) => quest.week_id === week.id && quest.kind === "bonus" && quest.day_index === dayIndex).length;
-        const bonusComplete = completedByDateAndKind.get(`${date}:bonus`) ?? 0;
-        return { date, requiredComplete, bonusAssigned, bonusComplete, strong: strongDateSet.has(date) };
+        const requiredQuests = dailyQuests.results.filter((quest) => quest.week_id === week.id && quest.kind === "required")
+          .map((quest) => ({ title: quest.title, complete: dailyCompletions.results.some((completion) => completion.quest_id === quest.id && completion.completed_on === date) }));
+        const bonusQuests = dailyQuests.results.filter((quest) => quest.week_id === week.id && quest.kind === "bonus" && quest.day_index === dayIndex)
+          .map((quest) => ({ title: quest.title, complete: dailyCompletions.results.some((completion) => completion.quest_id === quest.id && completion.completed_on === date) }));
+        const requiredComplete = requiredQuests.filter((quest) => quest.complete).length;
+        const bonusAssigned = bonusQuests.length;
+        const bonusComplete = bonusQuests.filter((quest) => quest.complete).length;
+        return { date, requiredComplete, bonusAssigned, bonusComplete, requiredQuests, bonusQuests, strong: strongDateSet.has(date) };
       });
       const assigned = weeklyQuests.results.filter((quest) => quest.week_id === week.id);
       const pointsEarned = transactions
@@ -152,12 +159,15 @@ async function loadHistory(userId: string, timezone: string, today: string) {
         id: week.id,
         startsOn: week.starts_on,
         endsOn: week.ends_on,
+        reflection: week.reflection,
+        isPreviousWeek: week.starts_on === addDays(weekBounds(today).start, -7),
         days,
         strongDays,
         weeklyCompleted: assigned.filter((quest) => Boolean(quest.complete)).length,
         weeklyAssigned: assigned.length,
+        weeklyQuests: assigned.map((quest) => ({ title: quest.title, complete: Boolean(quest.complete) })),
         pointsEarned,
-        rank: strongDays >= 6 ? "Legendary" : strongDays >= 5 ? "Strong" : strongDays >= 3 ? "Steady" : "Rebuilding",
+        rank: weeklyRank(strongDays),
       };
     }),
   };
@@ -231,6 +241,12 @@ export async function POST(request: Request) {
       const plan = validateWeekPlan(action, today);
       const weekId = `${userId}_${plan.startsOn}`;
       await saveWeekPlan(userId, weekId, plan);
+    } else if (action.type === "save-week-reflection") {
+      const reflection = action.reflection.trim();
+      if (reflection.length > 2_000) return Response.json({ error: "Weekly reflections must be 2,000 characters or fewer" }, { status: 400 });
+      const profile = await env.DB.prepare("SELECT timezone,master_mode FROM users WHERE id=?").bind(userId).first<{ timezone: string; master_mode: number }>();
+      const today = localDate(profile?.timezone ?? "America/New_York");
+      await saveWeekReflection(userId, action.weekId, reflection, { masterMode: Boolean(profile?.master_mode), startsOn: addDays(weekBounds(today).start, -7) });
     } else if (action.type === "toggle-daily") {
       const quest = await findDailyQuest(userId, action.questId);
       if (!quest) return Response.json({ error: "Quest is unavailable" }, { status: 404 });
@@ -311,7 +327,7 @@ export async function POST(request: Request) {
     } else if (action.type === "master-mode") {
       await env.DB.prepare("UPDATE users SET master_mode=? WHERE id=?").bind(action.enabled ? 1 : 0, userId).run();
     } else if (action.type === "profile") {
-      if (!action.displayName.trim() || !action.timezone.includes("/")) return Response.json({ error: "Invalid profile" }, { status: 400 });
+      if (!action.displayName.trim() || !isValidTimeZone(action.timezone)) return Response.json({ error: "Choose a valid IANA timezone" }, { status: 400 });
       await updateProfile(userId, action.displayName.trim(), action.timezone).run();
     } else {
       return Response.json({ error: "Unknown action" }, { status: 400 });

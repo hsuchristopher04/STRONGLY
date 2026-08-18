@@ -127,3 +127,51 @@ test("renders the Today prestige seal as live tier progress", async () => {
   assert.match(appSource, /onViewPrestige/);
   assert.match(css, /\.prestige-meter/);
 });
+
+test("ships searchable IANA timezone selection", async () => {
+  const [appSource, timezoneSource, routeSource, css] = await Promise.all([
+    readFile(new URL("../app/strongly-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/timezones.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/campaign/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /function TimezonePicker/);
+  assert.match(appSource, /role="combobox"/);
+  assert.match(appSource, /Search IANA timezones/);
+  assert.match(timezoneSource, /supportedValuesOf/);
+  assert.match(routeSource, /isValidTimeZone\(action\.timezone\)/);
+  assert.match(css, /\.timezone-options/);
+  assert.doesNotMatch(appSource, /<select value=\{timezone\}/);
+});
+
+test("ships immutable weekly reflections into History", async () => {
+  const [appSource, routeSource, serviceSource, migration] = await Promise.all([
+    readFile(new URL("../app/strongly-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/campaign/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/campaign/week-plan-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0007_weekly_reflections.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /CAMPAIGN JOURNAL/);
+  assert.match(appSource, /label="Reflection"/);
+  assert.match(appSource, /label="Quest details"/);
+  assert.match(appSource, /Add reflection/);
+  assert.match(appSource, /MASTER MODE · HONOR SYSTEM/);
+  assert.match(appSource, /HistoryQuestDetails/);
+  assert.match(appSource, /history-popover/);
+  assert.doesNotMatch(appSource, /Notes for next week/);
+  assert.match(routeSource, /save-week-reflection/);
+  assert.match(serviceSource, /status === "closed"/);
+  assert.match(serviceSource, /status !== "active"/);
+  assert.match(serviceSource, /canBacktrack/);
+  assert.match(migration, /ADD COLUMN reflection/);
+});
+
+test("uses neutral weekly rank boundaries", async () => {
+  const historySource = await readFile(new URL("../app/api/campaign/history.ts", import.meta.url), "utf8");
+  assert.match(historySource, /strongDays >= 7/);
+  assert.match(historySource, /Strong Week/);
+  assert.match(historySource, /Consistent/);
+  assert.match(historySource, /Building/);
+  assert.match(historySource, /Foundation/);
+  assert.doesNotMatch(historySource, /Rebuilding|Legendary/);
+});

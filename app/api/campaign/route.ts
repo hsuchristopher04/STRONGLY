@@ -222,8 +222,8 @@ export async function GET() {
     if (!auth) return Response.json({ error: "Authentication required" }, { status: 401 });
     const id = await ensureUser(auth.email, auth.displayName, auth.id);
     return Response.json(await loadState(id));
-  } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to load campaign" }, { status: 500 });
+  } catch {
+    return Response.json({ error: "Unable to load campaign. Please try again." }, { status: 500 });
   }
 }
 
@@ -334,6 +334,9 @@ export async function POST(request: Request) {
     }
     return Response.json(await loadState(userId));
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to update campaign" }, { status: error instanceof DailyQuestError || error instanceof WeekPlanError ? error.status : 500 });
+    if (error instanceof DailyQuestError || error instanceof WeekPlanError) {
+      return Response.json({ error: error.message }, { status: error.status });
+    }
+    return Response.json({ error: "Unable to update campaign. Please try again." }, { status: 500 });
   }
 }

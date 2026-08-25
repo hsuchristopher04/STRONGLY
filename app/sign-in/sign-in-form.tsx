@@ -2,8 +2,10 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function SignInForm() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [step, setStep] = useState<"email" | "code">("email");
@@ -40,7 +42,8 @@ export default function SignInForm() {
       const response = await fetch("/api/auth/verify-code", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, code }) });
       const payload = await response.json() as { error?: string; retryAfterSeconds?: number };
       if (!response.ok) { setCooldown(payload.retryAfterSeconds ?? cooldown); return setError(payload.error ?? "We couldn't verify that code. Please try again."); }
-      window.location.assign("/");
+      router.replace("/");
+      router.refresh();
     } catch { setError("We couldn't reach STRONGLY. Check your connection and try again."); }
     finally { setBusy(false); }
   }

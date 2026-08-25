@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { isValidTimeZone, supportedTimeZones } from "./timezones";
 
 type Identity = { email: string; displayName: string; fullName: string | null };
@@ -420,6 +421,7 @@ function PrestigeView({ prestige }: { prestige: Prestige }) {
 }
 
 function AccountPanel({ profile, onClose, onSaveName, onEmailChanged }: { profile: Profile; onClose: () => void; onSaveName: (displayName: string) => Promise<void>; onEmailChanged: (email: string) => void }) {
+  const router = useRouter();
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [email, setEmail] = useState(profile.email);
   const [pendingEmail, setPendingEmail] = useState<string | null>(null);
@@ -449,7 +451,7 @@ function AccountPanel({ profile, onClose, onSaveName, onEmailChanged }: { profil
     else { onEmailChanged(payload.email ?? pendingEmail); setEmail(payload.email ?? pendingEmail); setPendingEmail(null); setCode(""); setMessage("Account email updated."); }
     setBusy(false);
   }
-  async function signOut() { await fetch("/api/auth/sign-out", { method: "POST" }); window.location.assign("/"); }
+  async function signOut() { await fetch("/api/auth/sign-out", { method: "POST" }); router.replace("/"); router.refresh(); }
   return <section className="account-panel" role="dialog" aria-label="Profile and account"><header><div><p className="eyebrow">YOUR ACCOUNT</p><h2>Profile</h2><p>Manage the identity attached to your campaign.</p></div><button onClick={onClose} aria-label="Close profile">×</button></header><div className="account-section"><div className="account-section-title"><span>◆</span><div><b>Username</b><small>How your name appears throughout STRONGLY.</small></div></div><label htmlFor="account-username">Username</label><input id="account-username" maxLength={80} value={displayName} onChange={(event) => setDisplayName(event.target.value)} /><button className="button account-save" disabled={busy || !displayName.trim() || displayName.trim() === profile.displayName} onClick={async () => { setBusy(true); await onSaveName(displayName.trim()); setBusy(false); setMessage("Username updated."); }}>Save username</button></div><div className="account-section"><div className="account-section-title"><span>✦</span><div><b>Email address</b><small>A verification code is required before this changes.</small></div></div><label htmlFor="account-email">Email address</label><input id="account-email" type="email" value={email} onChange={(event) => { setEmail(event.target.value); setPendingEmail(null); setCode(""); }} />{pendingEmail ? <><label htmlFor="account-code">Verification code</label><input id="account-code" inputMode="numeric" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} placeholder="6-digit code" /><button className="button button-gold" disabled={busy || code.length !== 6} onClick={() => void verifyEmailChange()}>Verify new email</button><button className="account-email-resend" disabled={busy || emailCooldown > 0} onClick={() => void requestEmailChange()}>{emailCooldown > 0 ? `Resend code in ${emailCooldown}s` : "Resend verification code"}</button></> : <button className="button account-email-button" disabled={busy || emailCooldown > 0 || email.trim().toLowerCase() === profile.email} onClick={() => void requestEmailChange()}>{emailCooldown > 0 ? `Try again in ${emailCooldown}s` : "Send verification code"}</button>}{message && <p className="account-message" role="status">{message}</p>}</div><footer><button className="account-signout" onClick={signOut}>Sign out</button></footer></section>;
 }
 

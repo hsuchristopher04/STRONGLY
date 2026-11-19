@@ -60,38 +60,39 @@ export async function saveWeekPlan(userId: string, weekId: string, plan: ReturnT
   });
 }
 
-export async function toggleWeeklyQuest(userId: string, questId: string, now: string) {
+export async function toggleWeeklyQuest(userId: string, questId: string, now: string, previousWeek?: { masterMode: boolean; startsOn: string }) {
   return db.transaction(async (transaction) => {
     const quest = await transaction.prepare(
-      `SELECT q.completed_at,q.milestone_id,w.status FROM weekly_quests q
+      `SELECT q.completed_at,w.status,w.starts_on FROM weekly_quests q
        JOIN weeks w ON w.id=q.week_id AND w.user_id=q.user_id
        WHERE q.id=? AND q.user_id=? FOR UPDATE`,
-    ).bind(questId, userId).first<{ completed_at: string | null; milestone_id: string | null; status: string }>();
-    if (!quest || quest.status === "closed") throw new WeekPlanError("Quest is unavailable", 404);
+    ).bind(questId, userId).first<{ completed_at: string | null; status: string; starts_on: string }>();
+    if (!quest) throw new WeekPlanError("Quest is unavailable", 404);
+    const canBacktrack = quest.status === "closed" && previousWeek?.masterMode && quest.starts_on === previousWeek.startsOn;
+    if (quest.status !== "active" && !canBacktrack) throw new WeekPlanError(quest.status === "closed"
+      ? "Only the previous campaign's weekly quests can be corrected while Master Mode is enabled"
+      : "Weekly quests can only be completed during their active campaign");
     const completedAt = quest.completed_at ? null : now;
     await transaction.prepare("UPDATE weekly_quests SET completed_at=? WHERE id=? AND user_id=?")
       .bind(completedAt, questId, userId).run();
-    if (quest.milestone_id && completedAt) {
-      await transaction.prepare(
-        `UPDATE milestones SET
-          completed_by_weekly_quest_id=CASE WHEN completed_at IS NULL THEN ? ELSE completed_by_weekly_quest_id END,
-          completed_at=COALESCE(completed_at,?)
-         WHERE id=? AND user_id=?`,
-      ).bind(questId, now, quest.milestone_id, userId).run();
-    } else if (quest.milestone_id) {
-      await transaction.prepare("UPDATE milestones SET completed_at=NULL,completed_by_weekly_quest_id=NULL WHERE id=? AND user_id=? AND completed_by_weekly_quest_id=?")
-        .bind(quest.milestone_id, userId, questId).run();
-    }
     return { completed: Boolean(completedAt) };
   });
 }
 
 export async function toggleMilestone(userId: string, milestoneId: string, now: string) {
   return db.transaction(async (transaction) => {
-    const milestone = await transaction.prepare("SELECT completed_at,completed_by_weekly_quest_id FROM milestones WHERE id=? AND user_id=? FOR UPDATE")
-      .bind(milestoneId, userId).first<{ completed_at: string | null; completed_by_weekly_quest_id: string | null }>();
+    const milestone = await transaction.prepare("SELECT goal_id,position,completed_at FROM milestones WHERE id=? AND user_id=? FOR UPDATE")
+      .bind(milestoneId, userId).first<{ goal_id: string; position: number; completed_at: string | null }>();
     if (!milestone) throw new WeekPlanError("Milestone not found", 404);
-    if (milestone.completed_by_weekly_quest_id) throw new WeekPlanError("This milestone is completed by a linked weekly quest. Reopen that quest first.");
+    if (!milestone.completed_at) {
+      const earlierIncomplete = await transaction.prepare("SELECT id FROM milestones WHERE goal_id=? AND user_id=? AND position<? AND completed_at IS NULL LIMIT 1")
+        .bind(milestone.goal_id, userId, milestone.position).first<{ id: string }>();
+      if (earlierIncomplete) throw new WeekPlanError("Complete each earlier milestone before advancing to this one");
+    } else {
+      const laterComplete = await transaction.prepare("SELECT id FROM milestones WHERE goal_id=? AND user_id=? AND position>? AND completed_at IS NOT NULL LIMIT 1")
+        .bind(milestone.goal_id, userId, milestone.position).first<{ id: string }>();
+      if (laterComplete) throw new WeekPlanError("Reopen the later milestones before reopening this one");
+    }
     const completedAt = milestone.completed_at ? null : now;
     await transaction.prepare("UPDATE milestones SET completed_at=?,completed_by_weekly_quest_id=NULL WHERE id=? AND user_id=?")
       .bind(completedAt, milestoneId, userId).run();

@@ -40,11 +40,26 @@ async function milestone(id: string) {
 test.beforeEach(fixture);
 test.afterEach(closeDatabasePool);
 
-test("completing and reopening a linked weekly quest updates an automatically completed milestone", async () => {
+test("linked weekly quests never change milestone completion", async () => {
+  const before = await milestone("milestone_auto");
   await toggleWeeklyQuest(userId, "weekly_auto", now);
-  assert.deepEqual(await milestone("milestone_auto"), { completed_at: now, completed_by_weekly_quest_id: "weekly_auto" });
-  await assert.rejects(toggleMilestone(userId, "milestone_auto", now), (error) => error instanceof WeekPlanError && /Reopen that quest first/i.test(error.message));
+  assert.deepEqual(await milestone("milestone_auto"), before);
   await toggleWeeklyQuest(userId, "weekly_auto", now);
+  assert.deepEqual(await milestone("milestone_auto"), before);
+  await toggleMilestone(userId, "milestone_auto", now);
+  assert.deepEqual(await milestone("milestone_auto"), { completed_at: now, completed_by_weekly_quest_id: null });
+});
+
+test("milestones must be completed and reopened in sequence", async () => {
+  await db.prepare("UPDATE milestones SET completed_at=NULL WHERE id=? AND user_id=?").bind("milestone_manual", userId).run();
+  await assert.rejects(toggleMilestone(userId, "milestone_manual", now), (error) => error instanceof WeekPlanError && /earlier milestone/i.test(error.message));
+
+  await toggleMilestone(userId, "milestone_auto", now);
+  await toggleMilestone(userId, "milestone_manual", now);
+  await assert.rejects(toggleMilestone(userId, "milestone_auto", now), (error) => error instanceof WeekPlanError && /later milestones/i.test(error.message));
+
+  await toggleMilestone(userId, "milestone_manual", now);
+  await toggleMilestone(userId, "milestone_auto", now);
   assert.deepEqual(await milestone("milestone_auto"), { completed_at: null, completed_by_weekly_quest_id: null });
 });
 
@@ -53,6 +68,16 @@ test("reopening a weekly quest preserves a milestone that was already completed 
   await toggleWeeklyQuest(userId, "weekly_manual", now);
   await toggleWeeklyQuest(userId, "weekly_manual", now);
   assert.deepEqual(await milestone("milestone_manual"), before);
+});
+
+test("Master Mode can correct both states only in the immediately previous campaign", async () => {
+  await db.prepare("UPDATE weeks SET status='closed' WHERE id=? AND user_id=?").bind(weekId, userId).run();
+  await assert.rejects(toggleWeeklyQuest(userId, "weekly_auto", now), (error) => error instanceof WeekPlanError && /Master Mode/i.test(error.message));
+  await assert.rejects(toggleWeeklyQuest(userId, "weekly_auto", now, { masterMode: true, startsOn: "2026-07-26" }), (error) => error instanceof WeekPlanError);
+
+  const permission = { masterMode: true, startsOn: "2026-08-02" };
+  assert.deepEqual(await toggleWeeklyQuest(userId, "weekly_auto", now, permission), { completed: true });
+  assert.deepEqual(await toggleWeeklyQuest(userId, "weekly_auto", now, permission), { completed: false });
 });
 
 test("planning persists owned milestone links and rejects another user's milestone", async () => {

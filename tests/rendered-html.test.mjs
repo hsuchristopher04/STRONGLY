@@ -80,6 +80,8 @@ test("ships complete goal lifecycle controls", async () => {
     readFile(new URL("../drizzle/0004_goal_lifecycle.sql", import.meta.url), "utf8"),
   ]);
   for (const control of ["Show on Today", "Complete goal", "Archive", "Restore", "Delete", "Move milestone"]) assert.match(appSource, new RegExp(control, "i"));
+  assert.match(appSource, /Complete .* first/);
+  assert.match(appSource, /Reopen .* first/);
   for (const action of ["goal-status", "feature-goal", "delete-goal"]) assert.match(routeSource, new RegExp(action));
   assert.match(routeSource, /WHERE id=\? AND user_id=\?/);
   assert.match(migration, /goals_one_featured_per_user/);
@@ -93,6 +95,10 @@ test("ships persistent honor-system Master Mode", async () => {
   ]);
   assert.match(appSource, /Master Mode is intended for correcting honest mistakes/);
   assert.match(appSource, /Master Mode enabled/);
+  assert.match(appSource, /sidebar-master-mode/);
+  assert.match(appSource, /Turn off Master Mode/);
+  assert.match(appSource, /weekly quests from the immediately previous campaign/);
+  assert.match(appSource, /MASTER MODE · EDITABLE/);
   assert.match(appSource, /correctPastQuest/);
   assert.match(routeSource, /master_mode/);
   assert.match(migration, /master_mode integer NOT NULL DEFAULT 0/);

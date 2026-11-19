@@ -103,9 +103,9 @@ async function loadHistory(userId: string, timezone: string, today: string) {
        WHERE c.user_id=?`,
     ).bind(userId).all<{ week_id: string; kind: "required" | "bonus"; quest_id: string; completed_on: string }>(),
     env.DB.prepare(
-      `SELECT week_id,title,position,CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END complete
+      `SELECT id,week_id,title,position,CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END complete
        FROM weekly_quests WHERE user_id=? ORDER BY position`,
-    ).bind(userId).all<{ week_id: string; title: string; position: number; complete: number }>(),
+    ).bind(userId).all<{ id: string; week_id: string; title: string; position: number; complete: number }>(),
     env.DB.prepare("SELECT points,created_at FROM prestige_ledger WHERE user_id=?")
       .bind(userId).all<{ points: number; created_at: string }>(),
   ]);
@@ -165,7 +165,7 @@ async function loadHistory(userId: string, timezone: string, today: string) {
         strongDays,
         weeklyCompleted: assigned.filter((quest) => Boolean(quest.complete)).length,
         weeklyAssigned: assigned.length,
-        weeklyQuests: assigned.map((quest) => ({ title: quest.title, complete: Boolean(quest.complete) })),
+        weeklyQuests: assigned.map((quest) => ({ id: quest.id, title: quest.title, complete: Boolean(quest.complete) })),
         pointsEarned,
         rank: weeklyRank(strongDays),
       };
@@ -255,7 +255,9 @@ export async function POST(request: Request) {
       if (!canEditDailyQuest({ completedOn: action.completedOn, today, masterMode: Boolean(profile?.master_mode), weekStatus: quest.status, startsOn: quest.starts_on, endsOn: quest.ends_on, kind: quest.kind, dayIndex: quest.day_index })) return Response.json({ error: "Enable Master Mode to correct an earlier day in the current campaign" }, { status: 409 });
       await toggleDailyQuest({ userId, questId: action.questId, completedOn: action.completedOn, now });
     } else if (action.type === "toggle-weekly") {
-      await toggleWeeklyQuest(userId, action.questId, now);
+      const profile = await env.DB.prepare("SELECT timezone,master_mode FROM users WHERE id=?").bind(userId).first<{ timezone: string; master_mode: number }>();
+      const today = localDate(profile?.timezone ?? "America/New_York");
+      await toggleWeeklyQuest(userId, action.questId, now, { masterMode: Boolean(profile?.master_mode), startsOn: addDays(weekBounds(today).start, -7) });
     } else if (action.type === "toggle-milestone") {
       await toggleMilestone(userId, action.milestoneId, now);
     } else if (action.type === "save-goal") {
@@ -277,7 +279,14 @@ export async function POST(request: Request) {
       if (action.goalId) {
         const ownedGoal = await env.DB.prepare("SELECT id FROM goals WHERE id=? AND user_id=?").bind(goalId, userId).first();
         if (!ownedGoal) return Response.json({ error: "Goal not found" }, { status: 404 });
-        const existing = await env.DB.prepare("SELECT id FROM milestones WHERE goal_id=? AND user_id=?").bind(goalId, userId).all<{ id: string }>();
+        const existing = await env.DB.prepare("SELECT id,completed_at FROM milestones WHERE goal_id=? AND user_id=?").bind(goalId, userId).all<{ id: string; completed_at: string | null }>();
+        const completionById = new Map(existing.results.map((milestone) => [milestone.id, Boolean(milestone.completed_at)]));
+        let foundIncomplete = false;
+        for (const milestone of milestoneInputs) {
+          const complete = milestone.id ? Boolean(completionById.get(milestone.id)) : false;
+          if (!complete) foundIncomplete = true;
+          else if (foundIncomplete) return Response.json({ error: "Completed milestones must remain before incomplete milestones" }, { status: 409 });
+        }
         const retainedIds = new Set(milestoneInputs.map((milestone) => milestone.id).filter(Boolean));
         for (const milestone of existing.results.filter((item) => !retainedIds.has(item.id))) {
           const linkedQuest = await env.DB.prepare("SELECT id FROM weekly_quests WHERE user_id=? AND milestone_id=? LIMIT 1").bind(userId, milestone.id).first<{ id: string }>();
